@@ -34,7 +34,7 @@
     "tsconfig.json"
   ],
   "scripts": {
-    "build": "bun build ./src/index.ts ./src/cli.ts ./src/server.ts ./src/tui.ts ./src/capabilities.ts --outdir ./dist --target node --external @opencode-ai/plugin && tsc --emitDeclarationOnly",
+    "build": "bun build ./src/index.ts ./src/cli.ts ./src/server.ts ./src/tui.ts ./src/capabilities.ts --outdir ./dist --target bun --external @opencode-ai/plugin && tsc --emitDeclarationOnly",
     "check": "tsc --noEmit",
     "test": "bun run build && bun test ./tests",
     "prepublishOnly": "bun run build"

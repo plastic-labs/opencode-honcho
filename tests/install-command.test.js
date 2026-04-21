@@ -3,14 +3,14 @@ import os from "node:os"
 import path from "node:path"
 import { mkdtemp, readFile } from "node:fs/promises"
 
-const nodeExecutable = Bun.which("node")
+const bunExecutable = Bun.which("bun")
 
-if (!nodeExecutable) {
-  throw new Error("tests/install-command.test.js requires a Node executable on PATH")
+if (!bunExecutable) {
+  throw new Error("tests/install-command.test.js requires a Bun executable on PATH")
 }
 
 const runCli = async (args, env) => {
-  const child = Bun.spawn([nodeExecutable, "dist/cli.js", ...args], {
+  const child = Bun.spawn([bunExecutable, "dist/cli.js", ...args], {
     cwd: process.cwd(),
     env,
     stdout: "pipe",
@@ -26,16 +26,16 @@ const runCli = async (args, env) => {
   return { code, stdout, stderr }
 }
 
-test("source CLI keeps the Node-compatible shebang", async () => {
+test("source CLI uses the Bun shebang", async () => {
   const source = await readFile(path.join(process.cwd(), "src/cli.ts"), "utf-8")
 
-  expect(source.startsWith("#!/usr/bin/env node\n")).toBe(true)
+  expect(source.startsWith("#!/usr/bin/env bun\n")).toBe(true)
 })
 
-test("built CLI keeps the Node-compatible shebang", async () => {
+test("built CLI uses the Bun shebang", async () => {
   const built = await readFile(path.join(process.cwd(), "dist/cli.js"), "utf-8")
 
-  expect(built.startsWith("#!/usr/bin/env node\n")).toBe(true)
+  expect(built.startsWith("#!/usr/bin/env bun\n")).toBe(true)
 })
 
 test("install command explains how to recover when opencode is not on PATH", async () => {

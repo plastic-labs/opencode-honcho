@@ -1,9 +1,6 @@
-#!/usr/bin/env node
-
-// Keep the published CLI Node-compatible while the repo adopts Bun-first workflows.
+#!/usr/bin/env bun
 
 import path from "node:path"
-import { spawn } from "node:child_process"
 
 import { DEFAULT_PACKAGE_NAME, installGlobalConfig } from "./scaffold.js"
 
@@ -14,25 +11,19 @@ Examples:
   bunx @honcho-ai/opencode-honcho install
 `
 
-const runCommand = (command: string, args: string[], env?: NodeJS.ProcessEnv) =>
-  new Promise<void>((resolve, reject) => {
-    const child = spawn(command, args, {
-      stdio: "inherit",
-      env: {
-        ...process.env,
-        ...env,
-      },
-    })
-
-    child.on("error", reject)
-    child.on("exit", (code) => {
-      if (code === 0) {
-        resolve()
-        return
-      }
-      reject(new Error(`${command} ${args.join(" ")} exited with code ${code ?? "unknown"}`))
-    })
+const runCommand = async (command: string, args: string[], env?: Record<string, string | undefined>) => {
+  const proc = Bun.spawn([command, ...args], {
+    stdio: ["inherit", "inherit", "inherit"],
+    env: {
+      ...process.env,
+      ...env,
+    },
   })
+  const code = await proc.exited
+  if (code !== 0) {
+    throw new Error(`${command} ${args.join(" ")} exited with code ${code ?? "unknown"}`)
+  }
+}
 
 const preferredShellRcFile = () => {
   const shell = path.basename(process.env.SHELL || "")
@@ -92,10 +83,9 @@ const main = async () => {
     try {
       await runCommand("opencode", ["plugin", options.pluginSpec, "--global", ...(options.force ? ["--force"] : [])], env)
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        throw new Error(installPathRecoveryMessage())
-      }
-      if (error instanceof Error && /spawn opencode ENOENT/i.test(error.message)) {
+      const code = (error as { code?: string }).code
+      const message = error instanceof Error ? error.message : ""
+      if (code === "ENOENT" || /ENOENT/i.test(message)) {
         throw new Error(installPathRecoveryMessage())
       }
       throw error
