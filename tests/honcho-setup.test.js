@@ -354,6 +354,24 @@ test("honcho_setup returns a structured error when the shared config path cannot
   })
 })
 
+test("honcho_set_config rejects deprecated runtime tuning fields", async () => {
+  const rootDir = await mkdtemp(path.join(os.tmpdir(), "honcho-reject-deprecated-field-"))
+  const homeDir = await mkdtemp(path.join(os.tmpdir(), "honcho-home-reject-deprecated-"))
+
+  await withEnv({ HOME: homeDir, USER: "adavya", XDG_CONFIG_HOME: undefined }, async () => {
+    const hooks = await createPluginHarness(rootDir)
+    const result = JSON.parse(
+      await hooks.tool.honcho_set_config.execute(
+        { field: "dialecticReasoningLevel", value: "high" },
+        toolContext(rootDir),
+      ),
+    )
+
+    expect(result.ok).toBe(false)
+    expect(result.error).toMatch(/Unknown setting 'dialecticReasoningLevel'/)
+  })
+})
+
 test("honcho_setup returns ok false and does not persist when cloud auth validation fails", async () => {
   const rootDir = await mkdtemp(path.join(os.tmpdir(), "honcho-setup-invalid-auth-"))
   const homeDir = await mkdtemp(path.join(os.tmpdir(), "honcho-home-invalid-auth-"))

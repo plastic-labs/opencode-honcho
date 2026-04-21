@@ -23,11 +23,6 @@ type GlobalSettings = {
       peerModel?: "classic" | "hierarchical"
       writeFrequency?: "async" | "turn" | "session" | number
       sessionStrategy?: "per-repo" | "per-directory" | "per-session" | "global" | "git-branch" | "chat-instance"
-      dialecticReasoningLevel?: "minimal" | "low" | "medium" | "high" | "max"
-      dialecticDynamic?: boolean
-      dialecticMaxChars?: number
-      messageMaxChars?: number
-      saveMessages?: boolean
     }
   }
 }
@@ -101,6 +96,7 @@ const statusMessage = (settings: GlobalSettings) => {
 
 const saveSettings = async (partial: Partial<GlobalSettings>) => {
   const current = await readGlobalSettings()
+  const partialHost = partial.hosts?.opencode
   const nextApiKey =
     typeof partial.apiKey === "string"
       ? partial.apiKey
@@ -118,22 +114,16 @@ const saveSettings = async (partial: Partial<GlobalSettings>) => {
     hosts: {
       ...current.hosts,
       opencode: {
-        enabled: current.hosts?.opencode?.enabled ?? true,
-        baseUrl: current.hosts?.opencode?.baseUrl || DEFAULT_BASE_URL,
-        workspace: current.hosts?.opencode?.workspace || "opencode",
-        aiPeer: current.hosts?.opencode?.aiPeer || "opencode",
-        globalOverride: current.hosts?.opencode?.globalOverride ?? false,
-        recallMode: current.hosts?.opencode?.recallMode || "hybrid",
-        observation: current.hosts?.opencode?.observation || "directional",
-        peerModel: current.hosts?.opencode?.peerModel || "classic",
-        writeFrequency: current.hosts?.opencode?.writeFrequency || "async",
-        sessionStrategy: current.hosts?.opencode?.sessionStrategy || "per-directory",
-        dialecticReasoningLevel: current.hosts?.opencode?.dialecticReasoningLevel || "low",
-        dialecticDynamic: current.hosts?.opencode?.dialecticDynamic ?? true,
-        dialecticMaxChars: current.hosts?.opencode?.dialecticMaxChars || 600,
-        messageMaxChars: current.hosts?.opencode?.messageMaxChars || 25000,
-        saveMessages: current.hosts?.opencode?.saveMessages ?? true,
-        ...partial.hosts?.opencode,
+        enabled: partialHost?.enabled ?? current.hosts?.opencode?.enabled ?? true,
+        baseUrl: partialHost?.baseUrl ?? current.hosts?.opencode?.baseUrl ?? DEFAULT_BASE_URL,
+        workspace: partialHost?.workspace ?? current.hosts?.opencode?.workspace ?? "opencode",
+        aiPeer: partialHost?.aiPeer ?? current.hosts?.opencode?.aiPeer ?? "opencode",
+        globalOverride: partialHost?.globalOverride ?? current.hosts?.opencode?.globalOverride ?? false,
+        recallMode: partialHost?.recallMode ?? current.hosts?.opencode?.recallMode ?? "hybrid",
+        observation: partialHost?.observation ?? current.hosts?.opencode?.observation ?? "directional",
+        peerModel: partialHost?.peerModel ?? current.hosts?.opencode?.peerModel ?? "classic",
+        writeFrequency: partialHost?.writeFrequency ?? current.hosts?.opencode?.writeFrequency ?? "async",
+        sessionStrategy: partialHost?.sessionStrategy ?? current.hosts?.opencode?.sessionStrategy ?? "per-directory",
       },
     },
   }
@@ -306,6 +296,7 @@ const plugin: TuiPluginModule & { id: string } = {
 
 export const __testing = {
   normalizeSettings,
+  saveSettings,
   statusMessage,
   validateCloudApiKey,
 }

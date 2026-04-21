@@ -90,6 +90,16 @@ test("extractSessionId reads session id from message.part.updated payloads", () 
   ).toBe("ses-456")
 })
 
+test("extractSessionId prefers top-level ids and falls back across casing variants", () => {
+  expect(__testing.extractSessionId({ session_id: "ses-snake" })).toBe("ses-snake")
+  expect(
+    __testing.extractSessionId({
+      sessionId: "ses-top",
+      event: { sessionID: "ses-nested" },
+    }),
+  ).toBe("ses-top")
+})
+
 test("markAssistantMessageCaptured only marks the message after persistence succeeds", async () => {
   const state = __testing.createSessionState()
   state.assistantMessageParts.set("msg-123", {

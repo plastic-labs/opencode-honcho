@@ -35,12 +35,6 @@ type HonchoSettings = {
   peerModel: PeerModel
   writeFrequency: WriteFrequency
   sessionStrategy: SessionStrategy
-  dialecticReasoningLevel: DialecticReasoningLevel
-  dialecticDynamic: boolean
-  dialecticMaxChars: number
-  messageMaxChars: number
-  saveMessages: boolean
-  contextRefresh: ContextRefreshSettings
 }
 
 type HostScopedSettings = Partial<Omit<HonchoSettings, "apiKey" | "peerName">>
@@ -129,37 +123,31 @@ const DEFAULT_SETTINGS: HonchoSettings = {
   peerModel: "classic",
   writeFrequency: "async",
   sessionStrategy: "per-directory",
-  dialecticReasoningLevel: "low",
-  dialecticDynamic: true,
-  dialecticMaxChars: 600,
-  messageMaxChars: 25_000,
-  saveMessages: true,
-  contextRefresh: {
-    messageThreshold: 30,
-    ttlSeconds: 300,
-    skipTrivialPrompts: true,
-    useSessionStartDialectic: true,
-  },
+}
+
+const INTERNAL_DIALECTIC_REASONING_LEVEL: DialecticReasoningLevel = "low"
+const INTERNAL_DIALECTIC_MAX_CHARS = 600
+const INTERNAL_MESSAGE_MAX_CHARS = 25_000
+const INTERNAL_SAVE_MESSAGES = true
+const INTERNAL_CONTEXT_REFRESH: ContextRefreshSettings = {
+  messageThreshold: 30,
+  ttlSeconds: 300,
+  skipTrivialPrompts: true,
+  useSessionStartDialectic: true,
 }
 
 const BOOLEAN_KEYS = new Set<keyof HonchoSettings>([
   "enabled",
   "globalOverride",
-  "dialecticDynamic",
-  "saveMessages",
 ])
 
-const NUMBER_KEYS = new Set<keyof HonchoSettings>([
-  "dialecticMaxChars",
-  "messageMaxChars",
-])
+const NUMBER_KEYS = new Set<keyof HonchoSettings>([])
 
 const ENUM_KEYS: Record<string, ReadonlySet<string>> = {
   recallMode: new Set(["hybrid", "context", "tools"]),
   observation: new Set(["directional", "unified"]),
   peerModel: new Set(["classic", "hierarchical"]),
   sessionStrategy: new Set(["per-repo", "per-directory", "per-session", "global", "git-branch", "chat-instance"]),
-  dialecticReasoningLevel: new Set(["minimal", "low", "medium", "high", "max"]),
 }
 
 const INHERITABLE_STRING_KEYS = new Set<keyof HonchoSettings>(["apiKey", "baseUrl", "peerName", "aiPeer", "workspace"])
@@ -177,12 +165,6 @@ const TOP_LEVEL_SETTING_FIELDS = new Set<keyof HonchoSettings>([
   "peerModel",
   "writeFrequency",
   "sessionStrategy",
-  "dialecticReasoningLevel",
-  "dialecticDynamic",
-  "dialecticMaxChars",
-  "messageMaxChars",
-  "saveMessages",
-  "contextRefresh",
 ])
 
 const SETTING_FIELD_PATHS = new Set([
@@ -199,15 +181,6 @@ const SETTING_FIELD_PATHS = new Set([
   "peerModel",
   "writeFrequency",
   "sessionStrategy",
-  "dialecticReasoningLevel",
-  "dialecticDynamic",
-  "dialecticMaxChars",
-  "messageMaxChars",
-  "saveMessages",
-  "contextRefresh.messageThreshold",
-  "contextRefresh.ttlSeconds",
-  "contextRefresh.skipTrivialPrompts",
-  "contextRefresh.useSessionStartDialectic",
 ])
 
 const DURABLE_PATTERNS = [
@@ -395,20 +368,11 @@ const parseSettingValue = (fieldPath: string, raw: string): unknown => {
   }
   if (
     fieldPath === "enabled" ||
-    fieldPath === "globalOverride" ||
-    fieldPath === "dialecticDynamic" ||
-    fieldPath === "saveMessages" ||
-    fieldPath === "contextRefresh.skipTrivialPrompts" ||
-    fieldPath === "contextRefresh.useSessionStartDialectic"
+    fieldPath === "globalOverride"
   ) {
     return coerceBoolean(raw)
   }
-  if (
-    fieldPath === "dialecticMaxChars" ||
-    fieldPath === "messageMaxChars" ||
-    fieldPath === "contextRefresh.messageThreshold" ||
-    fieldPath === "contextRefresh.ttlSeconds"
-  ) {
+  if (NUMBER_KEYS.has(fieldPath as keyof HonchoSettings)) {
     return coerceNumber(raw)
   }
   if (fieldPath in ENUM_KEYS && !ENUM_KEYS[fieldPath].has(raw)) {
@@ -438,18 +402,6 @@ const normalizedRawSettings = (raw: Record<string, unknown>) => {
 
 const applyRawLayer = (target: HonchoSettings, raw: Record<string, unknown>) => {
   for (const [key, value] of Object.entries(raw) as Array<[keyof HonchoSettings, unknown]>) {
-    if (key === "contextRefresh") {
-      const refresh = isRecord(value) ? value : {}
-      for (const [refreshKey, refreshValue] of Object.entries(refresh) as Array<
-        [keyof ContextRefreshSettings, ContextRefreshSettings[keyof ContextRefreshSettings]]
-      >) {
-        if (refreshValue === undefined || refreshValue === null) {
-          continue
-        }
-        ;(target.contextRefresh as Record<string, unknown>)[refreshKey] = refreshValue
-      }
-      continue
-    }
     if (!TOP_LEVEL_SETTING_FIELDS.has(key)) {
       continue
     }
@@ -524,10 +476,7 @@ const normalizeScopedSettings = (raw: Record<string, unknown>, hostId = "opencod
 }
 
 const mergeSettings = (...rawLayers: Array<Record<string, unknown>>): HonchoSettings => {
-  const merged: HonchoSettings = {
-    ...DEFAULT_SETTINGS,
-    contextRefresh: { ...DEFAULT_SETTINGS.contextRefresh },
-  }
+  const merged: HonchoSettings = { ...DEFAULT_SETTINGS }
   for (const raw of rawLayers) {
     applyRawLayer(merged, raw)
   }
@@ -657,23 +606,17 @@ const lookupField = (payload: Record<string, unknown>, field: string) =>
 
 const extractSessionId = (input: Record<string, unknown> | undefined) => {
   const event = isRecord(input?.event) ? input.event : undefined
-  const eventProperties = isRecord(input?.event) && isRecord(input.event.properties) ? input.event.properties : undefined
-  const eventInfo = isRecord(eventProperties?.info) ? eventProperties.info : undefined
-  const eventPart = isRecord(eventProperties?.part) ? eventProperties.part : undefined
-  const value =
-    input?.sessionID ??
-    input?.sessionId ??
-    input?.session_id ??
-    event?.sessionID ??
-    event?.sessionId ??
-    event?.session_id ??
-    eventProperties?.sessionID ??
-    eventProperties?.sessionId ??
-    eventInfo?.sessionID ??
-    eventInfo?.sessionId ??
-    eventPart?.sessionID ??
-    eventPart?.sessionId
-  return typeof value === "string" && value.length > 0 ? value : "unknown-session"
+  const eventProperties = isRecord(event?.properties) ? event.properties : undefined
+  const candidates = [input, event, eventProperties, isRecord(eventProperties?.info) ? eventProperties.info : undefined, isRecord(eventProperties?.part) ? eventProperties.part : undefined]
+
+  for (const candidate of candidates) {
+    const value = candidate?.sessionID ?? candidate?.sessionId ?? candidate?.session_id
+    if (typeof value === "string" && value.length > 0) {
+      return value
+    }
+  }
+
+  return "unknown-session"
 }
 
 const deriveProjectRoot = (
@@ -1090,7 +1033,8 @@ const durableConclusionCandidate = (text: string, settings: HonchoSettings) => {
   if (!DURABLE_PATTERNS.some((pattern) => pattern.test(trimmed))) {
     return null
   }
-  return clampText(trimmed, settings.dialecticMaxChars)
+  void settings
+  return clampText(trimmed, INTERNAL_DIALECTIC_MAX_CHARS)
 }
 
 const extractPromptQuery = (input: Record<string, unknown> | undefined) => {
@@ -1298,8 +1242,6 @@ export const createHonchoRuntimePlugin =
         observation: handle.config.observation,
         sessionStrategy: handle.config.sessionStrategy,
         globalOverride: handle.config.globalOverride,
-        saveMessages: handle.config.saveMessages,
-        contextRefresh: handle.config.contextRefresh,
         peerModel: handle.config.peerModel,
         configured: hasConfiguredAuth(handle.config),
         localMode: isLocalBaseUrl(handle.config.baseUrl),
@@ -1319,8 +1261,8 @@ export const createHonchoRuntimePlugin =
       metadata: Record<string, unknown>,
       createdAt?: string,
     ) => {
-      if (!runtime.config.saveMessages) return
-      const trimmed = clampText(content.trim(), runtime.config.messageMaxChars)
+      if (!INTERNAL_SAVE_MESSAGES) return
+      const trimmed = clampText(content.trim(), INTERNAL_MESSAGE_MAX_CHARS)
       if (!trimmed) return
       await runtime.session.addMessages(peer.message(trimmed, { metadata, createdAt }))
     }
@@ -1351,7 +1293,7 @@ export const createHonchoRuntimePlugin =
     }
 
     const hydrateSessionStartContext = async (runtime: ActiveRuntime, state: SessionState) => {
-      const dialecticEnabled = runtime.config.contextRefresh.useSessionStartDialectic
+      const dialecticEnabled = INTERNAL_CONTEXT_REFRESH.useSessionStartDialectic
       const [userContextResult, agentContextResult, summariesResult, userChatResult, agentChatResult] =
         await Promise.allSettled([
           runtime.userPeer.context({
@@ -1369,7 +1311,7 @@ export const createHonchoRuntimePlugin =
                 {
                   target: runtime.userPeer,
                   session: runtime.session,
-                  reasoningLevel: runtime.config.dialecticReasoningLevel,
+                  reasoningLevel: INTERNAL_DIALECTIC_REASONING_LEVEL,
                 },
               )
             : Promise.resolve(null),
@@ -1378,7 +1320,7 @@ export const createHonchoRuntimePlugin =
                 "Summarize the assistant's recent work context for this project in 2-3 sentences.",
                 {
                   session: runtime.session,
-                  reasoningLevel: runtime.config.dialecticReasoningLevel,
+                  reasoningLevel: INTERNAL_DIALECTIC_REASONING_LEVEL,
                 },
               )
             : Promise.resolve(null),
@@ -1425,7 +1367,7 @@ export const createHonchoRuntimePlugin =
 
     const refreshPromptContext = async (runtime: ActiveRuntime, state: SessionState, query: string) => {
       const topicKey = deriveTopicKey(query)
-      if (!shouldRefreshPromptContext(state, topicKey, runtime.config.contextRefresh)) {
+      if (!shouldRefreshPromptContext(state, topicKey, INTERNAL_CONTEXT_REFRESH)) {
         return state.cachedPromptContext
       }
       const sessionContext = await runtime.session.context({
@@ -1560,7 +1502,7 @@ export const createHonchoRuntimePlugin =
           return
         }
         const query = extractPromptQuery(input)
-        if (shouldSkipContextRetrieval(query, handle.config.contextRefresh)) {
+        if (shouldSkipContextRetrieval(query, INTERNAL_CONTEXT_REFRESH)) {
           return
         }
         await withRuntime(input, async (runtime) => {
@@ -1816,7 +1758,7 @@ export const createHonchoRuntimePlugin =
                     (await runtime.agentPeer.chat(args.query, {
                       target: runtime.userPeer,
                       session: runtime.session,
-                      reasoningLevel: runtime.config.dialecticReasoningLevel,
+                      reasoningLevel: INTERNAL_DIALECTIC_REASONING_LEVEL,
                     })) ?? "",
                 }),
                 { ok: false, response: null, error: "Honcho is unavailable for chat." },
@@ -1849,7 +1791,7 @@ export const createHonchoRuntimePlugin =
 
             try {
               const runtime = await createActiveRuntime(pluginInput, { ...args, sessionID: context.sessionID }, configPath)
-              const content = clampText(args.content.trim(), runtime.config.dialecticMaxChars)
+              const content = clampText(args.content.trim(), INTERNAL_DIALECTIC_MAX_CHARS)
               const created = await maybeWriteConclusion(runtime, content, "tool.create_conclusion")
               return JSON.stringify(
                 {
