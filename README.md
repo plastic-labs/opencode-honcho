@@ -69,7 +69,7 @@ OpenCode reads and writes this shared config file directly. OpenCode-specific de
 ```jsonc
 {
   "apiKey": "hch-...",
-  "peerName": "adavya",
+  "peerName": "user-name",
   "baseUrl": "https://api.honcho.dev",
   "workspace": "opencode",
   "aiPeer": "opencode",
