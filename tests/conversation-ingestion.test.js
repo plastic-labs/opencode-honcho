@@ -1,5 +1,4 @@
-import test from "node:test"
-import assert from "node:assert/strict"
+import { expect, test } from "bun:test"
 
 import { __testing } from "../dist/index.js"
 
@@ -37,7 +36,7 @@ test("extractCompletedAssistantMessage uses current-turn parts and completion ti
     },
   })
 
-  assert.deepEqual(
+  expect(
     __testing.extractCompletedAssistantMessage(
       {
         event: {
@@ -57,17 +56,16 @@ test("extractCompletedAssistantMessage uses current-turn parts and completion ti
       },
       partState,
     ),
-    {
-      messageId: "msg-123",
-      sessionID: "ses-123",
-      text: "Final reply",
-      createdAt: "2024-03-09T16:00:04.321Z",
-    },
-  )
+  ).toEqual({
+    messageId: "msg-123",
+    sessionID: "ses-123",
+    text: "Final reply",
+    createdAt: "2024-03-09T16:00:04.321Z",
+  })
 })
 
 test("extractSessionId reads session id from nested event info", () => {
-  assert.equal(
+  expect(
     __testing.extractSessionId({
       event: {
         type: "message.updated",
@@ -76,12 +74,11 @@ test("extractSessionId reads session id from nested event info", () => {
         },
       },
     }),
-    "ses-789",
-  )
+  ).toBe("ses-789")
 })
 
 test("extractSessionId reads session id from message.part.updated payloads", () => {
-  assert.equal(
+  expect(
     __testing.extractSessionId({
       event: {
         type: "message.part.updated",
@@ -90,8 +87,7 @@ test("extractSessionId reads session id from message.part.updated payloads", () 
         },
       },
     }),
-    "ses-456",
-  )
+  ).toBe("ses-456")
 })
 
 test("markAssistantMessageCaptured only marks the message after persistence succeeds", async () => {
@@ -102,24 +98,54 @@ test("markAssistantMessageCaptured only marks the message after persistence succ
   })
 
   let attempts = 0
-  await assert.rejects(
+  await expect(
     __testing.markAssistantMessageCaptured(state, { messageId: "msg-123" }, async () => {
       attempts += 1
       throw new Error("transient write failure")
     }),
-    /transient write failure/,
-  )
+  ).rejects.toThrow(/transient write failure/)
 
-  assert.equal(attempts, 1)
-  assert.equal(state.capturedAssistantMessageIds.has("msg-123"), false)
-  assert.equal(state.assistantMessageParts.has("msg-123"), true)
+  expect(attempts).toBe(1)
+  expect(state.capturedAssistantMessageIds.has("msg-123")).toBe(false)
+  expect(state.assistantMessageParts.has("msg-123")).toBe(true)
 
   const captured = await __testing.markAssistantMessageCaptured(state, { messageId: "msg-123" }, async () => {
     attempts += 1
   })
 
-  assert.equal(captured, true)
-  assert.equal(attempts, 2)
-  assert.equal(state.capturedAssistantMessageIds.has("msg-123"), true)
-  assert.equal(state.assistantMessageParts.has("msg-123"), false)
+  expect(captured).toBe(true)
+  expect(attempts).toBe(2)
+  expect(state.capturedAssistantMessageIds.has("msg-123")).toBe(true)
+  expect(state.assistantMessageParts.has("msg-123")).toBe(false)
+})
+
+test("markAssistantMessageCaptured deduplicates concurrent writes for the same assistant message", async () => {
+  const state = __testing.createSessionState()
+  state.assistantMessageParts.set("msg-123", {
+    sessionID: "ses-123",
+    parts: new Map([["part-visible", "Final reply"]]),
+  })
+
+  let release
+  const barrier = new Promise((resolve) => {
+    release = resolve
+  })
+  let attempts = 0
+
+  const first = __testing.markAssistantMessageCaptured(state, { messageId: "msg-123" }, async () => {
+    attempts += 1
+    await barrier
+  })
+  const second = __testing.markAssistantMessageCaptured(state, { messageId: "msg-123" }, async () => {
+    attempts += 1
+    await barrier
+  })
+
+  release()
+
+  await expect(first).resolves.toBe(true)
+  await expect(second).resolves.toBe(false)
+  expect(attempts).toBe(1)
+  expect(state.capturedAssistantMessageIds.has("msg-123")).toBe(true)
+  expect(state.assistantMessageParts.has("msg-123")).toBe(false)
 })

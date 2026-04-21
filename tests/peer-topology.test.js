@@ -1,5 +1,4 @@
-import test from "node:test"
-import assert from "node:assert/strict"
+import { expect, test } from "bun:test"
 
 import { __testing } from "../dist/index.js"
 
@@ -14,12 +13,12 @@ test("root sessions keep user and root agent as peers", () => {
     parentAgentObserverPeerId: null,
   })
 
-  assert.deepEqual(topology.sessionPeerConfigs, {
+  expect(topology.sessionPeerConfigs).toEqual({
     "user:alice": { observeMe: true, observeOthers: false },
     opencode: { observeMe: true, observeOthers: true },
   })
-  assert.equal(topology.describedPeers.childAgentPeer, null)
-  assert.equal(topology.describedPeers.parentAgentObserverPeer, null)
+  expect(topology.describedPeers.childAgentPeer).toBeNull()
+  expect(topology.describedPeers.parentAgentObserverPeer).toBeNull()
 })
 
 test("classic peer model keeps delegated sessions on the Claude-style user and ai peers", () => {
@@ -33,12 +32,12 @@ test("classic peer model keeps delegated sessions on the Claude-style user and a
     parentAgentObserverPeerId: "opencode:root-parent",
   })
 
-  assert.deepEqual(topology.sessionPeerConfigs, {
+  expect(topology.sessionPeerConfigs).toEqual({
     "user:alice": { observeMe: true, observeOthers: false },
     opencode: { observeMe: true, observeOthers: true },
   })
-  assert.equal(topology.describedPeers.childAgentPeer, null)
-  assert.equal(topology.describedPeers.parentAgentObserverPeer, null)
+  expect(topology.describedPeers.childAgentPeer).toBeNull()
+  expect(topology.describedPeers.parentAgentObserverPeer).toBeNull()
 })
 
 test("hierarchical peer model scopes parent observation to the child peer only", () => {
@@ -52,20 +51,35 @@ test("hierarchical peer model scopes parent observation to the child peer only",
     parentAgentObserverPeerId: "opencode:root-parent",
   })
 
-  assert.deepEqual(topology.sessionPeerConfigs, {
+  expect(topology.sessionPeerConfigs).toEqual({
     "opencode:reviewer": { observeMe: true, observeOthers: false },
     "opencode:root-parent": { observeMe: false, observeOthers: true },
   })
-  assert.deepEqual(topology.describedPeers.childAgentPeer, {
+  expect(topology.describedPeers.childAgentPeer).toEqual({
     id: "opencode:reviewer",
     observeMe: true,
     observeOthers: false,
     sessionScoped: true,
   })
-  assert.deepEqual(topology.describedPeers.parentAgentObserverPeer, {
+  expect(topology.describedPeers.parentAgentObserverPeer).toEqual({
     id: "opencode:root-parent",
     observeMe: false,
     observeOthers: true,
     modelsOnly: ["opencode:reviewer"],
   })
+})
+
+test("local session state keys off the effective Honcho session key, not the raw OpenCode session id", () => {
+  const rootHandle = {
+    sessionId: "shared-open-session",
+    sessionKey: "per-directory:services-api:opencode",
+  }
+  const delegatedHandle = {
+    sessionId: "shared-open-session",
+    sessionKey: "per-directory:services-api:opencode-root-parent-opencode-reviewer",
+  }
+
+  expect(__testing.deriveSessionStateKey(rootHandle)).toBe(rootHandle.sessionKey)
+  expect(__testing.deriveSessionStateKey(delegatedHandle)).toBe(delegatedHandle.sessionKey)
+  expect(__testing.deriveSessionStateKey(rootHandle)).not.toBe(__testing.deriveSessionStateKey(delegatedHandle))
 })
