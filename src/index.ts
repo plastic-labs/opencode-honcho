@@ -678,7 +678,7 @@ const resolveSettings = async (rootDir: string, configPathOverride?: string) => 
   return {
     configPath,
     globalConfigPath,
-    settings: mergeSettings(envSettings(), normalizeScopedSettings(globalRaw)),
+    settings: mergeSettings(normalizeScopedSettings(globalRaw), envSettings()),
   }
 }
 
@@ -1600,7 +1600,7 @@ export const createHonchoRuntimePlugin =
                 providedBaseUrl || (providedApiKey ? DEFAULT_SETTINGS.baseUrl : handle.config.baseUrl || DEFAULT_SETTINGS.baseUrl)
               const persistedFields: string[] = []
 
-              if (!isLocalBaseUrl(effectiveBaseUrl)) {
+              if (!isLocalBaseUrl(effectiveBaseUrl) && effectiveApiKey) {
                 await validateSetupConnection({
                   apiKey: effectiveApiKey,
                   baseUrl: effectiveBaseUrl,
