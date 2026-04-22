@@ -113,19 +113,23 @@ test("honcho_setup writes shared Honcho config with root peerName and hosts.open
       expect(result.ok).toBe(true)
       expect(result.globalConfigPath).toBe(sharedConfigPath)
       expect(result.status.baseUrl).toBe("https://api.honcho.dev")
-      expect(persisted.peerName).toBe("adavya")
+      expect(persisted.peerName).toBe("user")
       expect(persisted.apiKey).toBe("new-key")
       expect(persisted.honchoApiKey).toBeUndefined()
+      expect(persisted.baseUrl).toBe("https://api.honcho.dev")
+      expect(persisted.workspace).toBeUndefined()
+      expect(persisted.aiPeer).toBeUndefined()
+      expect(persisted.globalOverride).toBeUndefined()
+      expect(persisted.peerModel).toBeUndefined()
+      expect(persisted.writeFrequency).toBeUndefined()
+      expect(persisted.sessionStrategy).toBeUndefined()
+      expect(persisted.recallMode).toBeUndefined()
+      expect(persisted.observation).toBeUndefined()
       expect(persisted.hosts.opencode).toEqual({
-        enabled: true,
-        baseUrl: "https://api.honcho.dev",
         aiPeer: "opencode",
         workspace: "opencode",
-        globalOverride: false,
         recallMode: "hybrid",
-        observation: "directional",
-        peerModel: "classic",
-        writeFrequency: "async",
+        observationMode: "directional",
         sessionStrategy: "per-directory",
       })
       expect("linkedHosts" in persisted.hosts.opencode).toBe(false)
@@ -149,12 +153,12 @@ test("honcho_status reads effective settings from shared hosts.opencode config",
       {
         peerName: "adavya",
         apiKey: "status-key",
+        baseUrl: "https://api.honcho.dev",
         hosts: {
           opencode: {
-            baseUrl: "https://api.honcho.dev",
             aiPeer: "opencode",
             workspace: "opencode",
-            observation: "directional",
+            observationMode: "directional",
           },
         },
       },
@@ -207,9 +211,9 @@ test("honcho_status ignores a local .opencode/honcho.json and only reads ~/.honc
       {
         peerName: "adavya",
         apiKey: "shared-key",
+        baseUrl: "https://api.honcho.dev",
         hosts: {
           opencode: {
-            baseUrl: "https://api.honcho.dev",
             aiPeer: "opencode",
             workspace: "opencode",
           },
@@ -267,9 +271,9 @@ test("honcho_status lets exported HONCHO_* values override ~/.honcho/config.json
       {
         peerName: "adavya",
         apiKey: "file-key",
+        baseUrl: "https://api.honcho.dev",
         hosts: {
           opencode: {
-            baseUrl: "https://api.honcho.dev",
             aiPeer: "opencode",
             workspace: "file-workspace",
           },
@@ -339,37 +343,32 @@ test("honcho_status preserves existing shared global config and adds hosts.openc
     expect(status.workspace).toBe("opencode")
     expect(persisted.apiKey).toBe("existing-key")
     expect(persisted.peerName).toBe("alice")
-    expect(persisted.workspace).toBe("opencode")
-    expect(persisted.aiPeer).toBe("opencode")
     expect(persisted.baseUrl).toBe("https://api.honcho.dev")
-    expect(persisted.globalOverride).toBe(false)
-    expect(persisted.recallMode).toBe("hybrid")
-    expect(persisted.observation).toBe("directional")
-    expect(persisted.peerModel).toBe("classic")
-    expect(persisted.writeFrequency).toBe("async")
-    expect(persisted.sessionStrategy).toBe("per-directory")
+    expect(persisted.workspace).toBeUndefined()
+    expect(persisted.aiPeer).toBeUndefined()
+    expect(persisted.globalOverride).toBeUndefined()
+    expect(persisted.recallMode).toBeUndefined()
+    expect(persisted.observation).toBeUndefined()
+    expect(persisted.peerModel).toBeUndefined()
+    expect(persisted.writeFrequency).toBeUndefined()
+    expect(persisted.sessionStrategy).toBeUndefined()
     expect(persisted.hosts.claude_code).toEqual({
       workspace: "claude_code",
       aiPeer: "claude",
     })
     expect(persisted.hosts.opencode).toEqual({
-      enabled: true,
-      baseUrl: "https://api.honcho.dev",
       aiPeer: "opencode",
       workspace: "opencode",
-      globalOverride: false,
       recallMode: "hybrid",
-      observation: "directional",
-      peerModel: "classic",
-      writeFrequency: "async",
+      observationMode: "directional",
       sessionStrategy: "per-directory",
     })
   })
 })
 
-test("honcho_status uses root-level global host settings when globalOverride is true", async () => {
-  const rootDir = await mkdtemp(path.join(os.tmpdir(), "honcho-global-override-root-"))
-  const homeDir = await mkdtemp(path.join(os.tmpdir(), "honcho-home-global-override-"))
+test("honcho_status uses root baseUrl together with host-scoped OpenCode defaults", async () => {
+  const rootDir = await mkdtemp(path.join(os.tmpdir(), "honcho-root-baseurl-host-defaults-"))
+  const homeDir = await mkdtemp(path.join(os.tmpdir(), "honcho-home-root-baseurl-host-defaults-"))
   const sharedConfigDir = path.join(homeDir, ".honcho")
   const sharedConfigPath = path.join(sharedConfigDir, "config.json")
 
@@ -380,15 +379,11 @@ test("honcho_status uses root-level global host settings when globalOverride is 
       {
         peerName: "alice",
         apiKey: "status-key",
-        workspace: "global-workspace",
-        aiPeer: "global-ai",
-        baseUrl: "https://api.honcho.dev",
-        globalOverride: true,
+        baseUrl: "http://127.0.0.1:8000",
         hosts: {
           opencode: {
             workspace: "host-workspace",
             aiPeer: "host-ai",
-            baseUrl: "http://127.0.0.1:8000",
           },
         },
       },
@@ -412,9 +407,9 @@ test("honcho_status uses root-level global host settings when globalOverride is 
     const hooks = await createPluginHarness(rootDir)
     const result = JSON.parse(await hooks.tool.honcho_status.execute({}, toolContext(rootDir)))
 
-    expect(result.workspace).toBe("global-workspace")
-    expect(result.baseUrl).toBe("https://api.honcho.dev")
-    expect(result.peers.rootAgentPeer.id).toBe("global-ai")
+    expect(result.workspace).toBe("host-workspace")
+    expect(result.baseUrl).toBe("http://127.0.0.1:8000")
+    expect(result.peers.rootAgentPeer.id).toBe("host-ai")
   })
 })
 
@@ -438,21 +433,31 @@ test("honcho_setup returns a structured error when the shared config path cannot
   })
 })
 
-test("honcho_set_config rejects deprecated runtime tuning fields", async () => {
+test("honcho_set_config rejects removed and deprecated config fields", async () => {
   const rootDir = await mkdtemp(path.join(os.tmpdir(), "honcho-reject-deprecated-field-"))
   const homeDir = await mkdtemp(path.join(os.tmpdir(), "honcho-home-reject-deprecated-"))
 
   await withEnv({ HOME: homeDir, USER: "adavya", XDG_CONFIG_HOME: undefined }, async () => {
     const hooks = await createPluginHarness(rootDir)
-    const result = JSON.parse(
-      await hooks.tool.honcho_set_config.execute(
-        { field: "dialecticReasoningLevel", value: "high" },
-        toolContext(rootDir),
-      ),
-    )
 
-    expect(result.ok).toBe(false)
-    expect(result.error).toMatch(/Unknown setting 'dialecticReasoningLevel'/)
+    for (const field of [
+      "dialecticReasoningLevel",
+      "enabled",
+      "peerModel",
+      "writeFrequency",
+      "globalOverride",
+      "observation",
+    ]) {
+      const result = JSON.parse(
+        await hooks.tool.honcho_set_config.execute(
+          { field, value: "high" },
+          toolContext(rootDir),
+        ),
+      )
+
+      expect(result.ok).toBe(false)
+      expect(result.error).toMatch(new RegExp(`Unknown setting '${field}'`))
+    }
   })
 })
 
