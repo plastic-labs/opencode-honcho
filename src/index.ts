@@ -3,7 +3,6 @@ import { mkdir, readFile, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { tool, type Plugin, type PluginInput } from "@opencode-ai/plugin"
 import { Honcho } from "@honcho-ai/sdk"
-import { installGlobalConfig, scaffoldTemplates } from "./scaffold.js"
 
 type RecallMode = "hybrid" | "context" | "tools"
 type SessionStrategy = "per-repo" | "per-directory" | "per-session" | "global" | "git-branch" | "chat-instance"
@@ -94,7 +93,6 @@ type PeerTopology = {
   }
 }
 
-const SETTINGS_FILE_NAME = "honcho.json"
 const SETTINGS_DIR_NAME = ".opencode"
 const SHARED_SETTINGS_DIR_NAME = ".honcho"
 const SHARED_SETTINGS_FILE_NAME = "config.json"
@@ -112,8 +110,6 @@ const DEFAULT_SETTINGS: HonchoSettings = {
   sessionStrategy: "per-directory",
 }
 
-const INTERNAL_PEER_MODEL = "classic" as const
-const INTERNAL_WRITE_FREQUENCY = "async" as const
 const INTERNAL_DIALECTIC_REASONING_LEVEL: DialecticReasoningLevel = "low"
 const INTERNAL_DIALECTIC_MAX_CHARS = 600
 const INTERNAL_MESSAGE_MAX_CHARS = 25_000
@@ -550,10 +546,7 @@ const extractSessionId = (input: Record<string, unknown> | undefined) => {
   return "unknown-session"
 }
 
-const deriveProjectRoot = (
-  pluginInput: PluginInput,
-  configPathOverride?: string,
-) => {
+const deriveProjectRoot = (pluginInput: PluginInput) => {
   const hints = [pluginInput.directory, pluginInput.worktree, pluginInput.project?.worktree].filter(
     (value): value is string => Boolean(value),
   )
@@ -603,7 +596,7 @@ const envSettings = (): Record<string, unknown> => ({
   aiPeer: process.env.HONCHO_AI_PEER || "",
 })
 
-const resolveSettings = async (rootDir: string, configPathOverride?: string) => {
+const resolveSettings = async (configPathOverride?: string) => {
   const configPath = sharedConfigPath(configPathOverride)
   const { globalConfigPath, globalRaw } = await ensureSharedGlobalSettings(configPath)
   return {
@@ -674,30 +667,6 @@ const ensureSharedGlobalSettings = async (configPath = sharedGlobalSettingsPath(
     globalConfigPath: configPath,
     globalRaw: normalizedRawSettings(next),
   }
-}
-
-const deriveAgentLabel = (input: Record<string, unknown> | undefined, pluginInput: PluginInput) => {
-  const candidates = [
-    input?.agentID,
-    input?.agentId,
-    isRecord(input?.agent) ? input.agent.id : undefined,
-    isRecord(input?.agent) ? input.agent.name : undefined,
-    pluginInput.project?.id,
-    "root",
-  ]
-  const match = candidates.find((candidate) => typeof candidate === "string" && candidate.length > 0)
-  return typeof match === "string" ? match : "root"
-}
-
-const deriveParentAgentLabel = (input: Record<string, unknown> | undefined) => {
-  const candidates = [
-    input?.parentAgentID,
-    input?.parentAgentId,
-    isRecord(input?.parentAgent) ? input.parentAgent.id : undefined,
-    isRecord(input?.parentAgent) ? input.parentAgent.name : undefined,
-  ]
-  const match = candidates.find((candidate) => typeof candidate === "string" && candidate.length > 0)
-  return typeof match === "string" ? match : null
 }
 
 const resolveGitDir = async (rootDir: string): Promise<string | null> => {
@@ -780,8 +749,8 @@ const deriveRuntimeHandle = async (
   input: Record<string, unknown> | undefined,
   configPathOverride?: string,
 ): Promise<RuntimeHandle> => {
-  const rootDir = deriveProjectRoot(pluginInput, configPathOverride)
-  const { configPath, globalConfigPath, settings } = await resolveSettings(rootDir, configPathOverride)
+  const rootDir = deriveProjectRoot(pluginInput)
+  const { configPath, globalConfigPath, settings } = await resolveSettings(configPathOverride)
   const sessionId = extractSessionId(input)
   const repoName = path.basename(rootDir)
   const workspaceId = normalizeId(settings.workspace || "opencode")
@@ -838,25 +807,6 @@ const buildPeerTopology = (handle: Pick<
     observeMe: true,
     observeOthers: true,
   }
-  const childAgentPeer =
-    handle.childAgentPeerId === null
-      ? null
-      : {
-          id: handle.childAgentPeerId,
-          observeMe: true,
-          observeOthers: false,
-          sessionScoped: true,
-        }
-  const parentAgentObserverPeer =
-    handle.parentAgentObserverPeerId === null
-      ? null
-      : {
-          id: handle.parentAgentObserverPeerId,
-          observeMe: false,
-          observeOthers: true,
-          modelsOnly: childAgentPeer ? [childAgentPeer.id] : [],
-        }
-
   return {
     sessionPeerConfigs: {
       [userPeer.id]: { observeMe: true, observeOthers: false },
@@ -1029,20 +979,6 @@ type ChatToolResult =
       workspace?: string
       sessionKey?: string
       response: string | null
-      error: string
-    }
-
-type ConclusionToolResult =
-  | {
-      ok: boolean
-      workspace: string
-      sessionKey: string
-      content: string
-    }
-  | {
-      ok: false
-      workspace?: string
-      sessionKey?: string
       error: string
     }
 
@@ -1342,7 +1278,7 @@ export const createHonchoRuntimePlugin =
           return
         }
         if (event.type === "session.idle" || event.type === "session.compacted") {
-          await withRuntime(payload, async (runtime) => {
+          await withRuntime(payload, async () => {
             await log("info", "Honcho lifecycle boundary observed.", {
               event: event.type,
               ...(await runtimeStatus(payload)),
@@ -1741,9 +1677,7 @@ export const __testing = {
   timestampToIso,
   upsertAssistantMessagePart,
   extractSessionId,
-  installGlobalConfig,
   normalizeId,
   sessionPeerAdditions,
-  scaffoldTemplates,
 }
 export default HonchoRuntimePlugin
