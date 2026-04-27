@@ -200,6 +200,60 @@ test("honcho_status reads effective settings from shared hosts.opencode config",
   })
 })
 
+test("honcho_status applies cloud and self-hosted no-key configuration rules", async () => {
+  const cases = [
+    { name: "cloud", baseUrl: "https://api.honcho.dev", configured: false, localMode: false },
+    { name: "localhost", baseUrl: "http://127.0.0.1:8000", configured: true, localMode: true },
+    { name: "custom", baseUrl: "http://honcho.internal:8000", configured: true, localMode: false },
+  ]
+
+  for (const scenario of cases) {
+    const rootDir = await mkdtemp(path.join(os.tmpdir(), `honcho-status-${scenario.name}-`))
+    const homeDir = await mkdtemp(path.join(os.tmpdir(), `honcho-home-${scenario.name}-`))
+    const sharedConfigDir = path.join(homeDir, ".honcho")
+    const sharedConfigPath = path.join(sharedConfigDir, "config.json")
+
+    await mkdir(sharedConfigDir, { recursive: true })
+    await writeFile(
+      sharedConfigPath,
+      JSON.stringify(
+        {
+          peerName: "user",
+          baseUrl: scenario.baseUrl,
+          hosts: {
+            opencode: {
+              aiPeer: "opencode",
+              workspace: "opencode",
+            },
+          },
+        },
+        null,
+        2,
+      ),
+    )
+
+    await withEnv({
+      HOME: homeDir,
+      USER: "ignored-user",
+      XDG_CONFIG_HOME: undefined,
+      HONCHO_API_KEY: undefined,
+      HONCHO_URL: undefined,
+      HONCHO_BASE_URL: undefined,
+      HONCHO_WORKSPACE: undefined,
+      HONCHO_WORKSPACE_ID: undefined,
+      HONCHO_AI_PEER: undefined,
+      HONCHO_PEER_NAME: undefined,
+    }, async () => {
+      const hooks = await createPluginHarness(rootDir)
+      const result = JSON.parse(await hooks.tool.honcho_status.execute({}, toolContext(rootDir)))
+
+      expect(result.configured).toBe(scenario.configured)
+      expect(result.localMode).toBe(scenario.localMode)
+      expect(result.baseUrl).toBe(scenario.baseUrl)
+    })
+  }
+})
+
 test("honcho_status ignores a local .opencode/honcho.json and only reads ~/.honcho/config.json", async () => {
   const rootDir = await mkdtemp(path.join(os.tmpdir(), "honcho-ignore-local-config-"))
   const homeDir = await mkdtemp(path.join(os.tmpdir(), "honcho-home-ignore-local-"))
@@ -535,6 +589,38 @@ test("honcho_setup returns the explicit no-key response for default cloud setup 
       expect(result.message).toMatch(/No Honcho API key is configured/i)
       expect(fetchCalled).toBe(false)
     })
+  })
+})
+
+test("honcho_setup marks custom self-hosted baseUrl without apiKey as configured", async () => {
+  const rootDir = await mkdtemp(path.join(os.tmpdir(), "honcho-setup-self-hosted-"))
+  const homeDir = await mkdtemp(path.join(os.tmpdir(), "honcho-home-setup-self-hosted-"))
+  const sharedConfigPath = path.join(homeDir, ".honcho", "config.json")
+
+  await withEnv({
+    HOME: homeDir,
+    USER: "ignored-user",
+    XDG_CONFIG_HOME: undefined,
+    HONCHO_API_KEY: undefined,
+    HONCHO_URL: undefined,
+    HONCHO_BASE_URL: undefined,
+    HONCHO_WORKSPACE: undefined,
+    HONCHO_WORKSPACE_ID: undefined,
+    HONCHO_AI_PEER: undefined,
+    HONCHO_PEER_NAME: undefined,
+  }, async () => {
+    const hooks = await createPluginHarness(rootDir)
+    const result = JSON.parse(
+      await hooks.tool.honcho_setup.execute({ baseUrl: "http://honcho.internal:8000" }, toolContext(rootDir)),
+    )
+    const persisted = JSON.parse(await readFile(sharedConfigPath, "utf-8"))
+
+    expect(result.ok).toBe(true)
+    expect(result.status.configured).toBe(true)
+    expect(result.status.localMode).toBe(false)
+    expect(result.status.baseUrl).toBe("http://honcho.internal:8000")
+    expect(persisted.baseUrl).toBe("http://honcho.internal:8000")
+    expect(persisted.apiKey).toBeUndefined()
   })
 })
 
