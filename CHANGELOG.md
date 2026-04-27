@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.1
+
+- Align Honcho runtime with shared config.
+- Slash command clean-up.
+
 ## 0.1.0
 
 - Initial standalone OpenCode Honcho plugin runtime package.

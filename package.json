@@ -1,6 +1,6 @@
 {
   "name": "@honcho-ai/opencode-honcho",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "description": "Honcho memory integration for OpenCode",
   "license": "MIT",
