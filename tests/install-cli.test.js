@@ -62,3 +62,33 @@ test("installGlobalConfig preserves existing config and avoids duplicate plugin 
   expect(config.command["honcho:unset"]).toBeUndefined()
   expect(config.command["honcho:config"]).toBeUndefined()
 })
+
+test("installGlobalConfig replaces stale Honcho plugin artifacts", async () => {
+  const configDir = await mkdtemp(path.join(os.tmpdir(), "opencode-install-stale-honcho-"))
+  await mkdir(configDir, { recursive: true })
+  await writeFile(
+    path.join(configDir, "opencode.json"),
+    JSON.stringify(
+      {
+        plugin: [
+          "/tmp/opencode-honcho/honcho-ai-opencode-honcho-0.1.3.tgz",
+          "opencode-supermemory",
+          ["@honcho-ai/opencode-honcho@0.1.1", { enabled: true }],
+        ],
+      },
+      null,
+      2,
+    ),
+  )
+
+  await __testing.installGlobalConfig({
+    configDir,
+    pluginSpec: "@honcho-ai/opencode-honcho",
+  })
+
+  const config = JSON.parse(await readFile(path.join(configDir, "opencode.json"), "utf-8"))
+  expect(config.plugin).toEqual([
+    "opencode-supermemory",
+    "@honcho-ai/opencode-honcho",
+  ])
+})

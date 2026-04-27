@@ -12,7 +12,7 @@ Give OpenCode long-term memory that survives context wipes, session restarts, an
 2. Sign up or log in
 3. Copy your API key
 
-### Step 2: Install the Plugin
+### Step 2: Install or Update the Plugin
 
 <details>
 <summary>Windows local install</summary>
@@ -28,7 +28,7 @@ bun install && bun run build && bun .\dist\cli.js install --plugin-spec "%CD%" -
 This package installs the Honcho plugin into OpenCode and writes the Honcho command templates into your global OpenCode config.
 
 ```bash
-bunx @honcho-ai/opencode-honcho install
+bunx @honcho-ai/opencode-honcho@latest install --force
 ```
 
 This installer expects the `opencode` CLI to already be installed and available on your `PATH`.
