@@ -14,25 +14,20 @@ Give OpenCode long-term memory that survives context wipes, session restarts, an
 
 ### Step 2: Install the Plugin
 
-<details>
-<summary>Windows local install</summary>
-
-```bat
-git clone --branch main https://github.com/plastic-labs/opencode-honcho.git
-cd opencode-honcho
-bun install && bun run build && bun .\dist\cli.js install --plugin-spec "%CD%" --force
-```
-
-</details>
-
-This package installs the Honcho plugin into OpenCode and writes the Honcho command templates into your global OpenCode config.
+OpenCode installs the Honcho plugin and adds it to your global OpenCode config.
 
 ```bash
-bunx @honcho-ai/opencode-honcho install
+opencode plugin @honcho-ai/opencode-honcho --global
 ```
 
-This installer expects the `opencode` CLI to already be installed and available on your `PATH`.
-If the installer cannot find `opencode`, restart your shell or source your shell config and run the command again.
+To update an existing plugin install:
+
+```bash
+opencode plugin @honcho-ai/opencode-honcho --force
+```
+
+This command expects the `opencode` CLI to already be installed and available on your `PATH`.
+If your shell cannot find `opencode`, restart your shell or source your shell config and run the command again.
 
 ### Step 3: Run Setup in OpenCode
 
@@ -55,11 +50,11 @@ If the installer cannot find `opencode`, restart your shell or source your shell
 
 ## Installation Output
 
-The installer:
+OpenCode:
 
 - registers `@honcho-ai/opencode-honcho` with OpenCode
-- enables both native server and TUI plugin targets
-- writes Honcho command templates into global OpenCode config
+- resolves the package's native server and TUI plugin targets
+- updates plugin entries in your global OpenCode config
 - activates the plugin globally for all OpenCode projects
 
 ## Configuration
@@ -154,8 +149,7 @@ For macOS/Linux local branch testing:
 ```bash
 bun install
 bun run build
-bun ./dist/cli.js install --plugin-spec "$PWD" --force
+opencode plugin "$PWD" --global --force
 ```
 
-That install command wires the current checkout into OpenCode with `--force`, which is the intended local branch-testing flow.
-
+That command wires the current checkout into OpenCode with `--force`, which is the intended local branch-testing flow.
