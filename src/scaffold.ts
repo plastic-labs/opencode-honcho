@@ -3,7 +3,6 @@ import { homedir } from "node:os"
 import path from "node:path"
 
 export const DEFAULT_PACKAGE_NAME = "@honcho-ai/opencode-honcho"
-const HONCHO_TARBALL_PATTERN = /(?:^|[/\\])honcho-ai-opencode-honcho-[^/\\]+\.tgz$/
 
 type InstallConfigOptions = {
   configDir?: string
@@ -45,38 +44,15 @@ const normalizePluginList = (value: unknown) =>
       )
     : []
 
-const stripPackageVersion = (spec: string) => {
-  const slashIndex = spec.lastIndexOf("/")
-  const atIndex = spec.lastIndexOf("@")
-  return atIndex > slashIndex ? spec.slice(0, atIndex) : spec
-}
-
-const isHonchoPluginSpec = (spec: string) =>
-  stripPackageVersion(spec) === DEFAULT_PACKAGE_NAME || HONCHO_TARBALL_PATTERN.test(spec)
-
 const ensurePluginSpec = (
   plugins: Array<string | [string, Record<string, unknown>]>,
   pluginSpec: string,
 ) => {
-  if (isHonchoPluginSpec(pluginSpec)) {
-    const staleHonchoEntryWithOptions = plugins.find((entry) => {
-      const spec = typeof entry === "string" ? entry : entry[0]
-      return !HONCHO_TARBALL_PATTERN.test(spec) && isHonchoPluginSpec(spec) && Array.isArray(entry) && entry[1]
-    })
-    const nextHonchoEntry = Array.isArray(staleHonchoEntryWithOptions)
-      ? [pluginSpec, staleHonchoEntryWithOptions[1]]
-      : pluginSpec
-    const pluginsWithoutStaleHoncho = plugins.filter((entry) => {
-      const spec = typeof entry === "string" ? entry : entry[0]
-      return !isHonchoPluginSpec(spec)
-    })
-    return [...pluginsWithoutStaleHoncho, nextHonchoEntry]
-  }
-  const packageName = stripPackageVersion(pluginSpec)
+  const packageName = pluginSpec.replace(/@[^/]+$/, "")
   if (
     plugins.some((entry) => {
       const spec = typeof entry === "string" ? entry : entry[0]
-      return spec === pluginSpec || spec === packageName || stripPackageVersion(spec) === packageName
+      return spec === pluginSpec || spec === packageName || spec.replace(/@[^/]+$/, "") === packageName
     })
   ) {
     return plugins
