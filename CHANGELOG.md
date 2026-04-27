@@ -4,6 +4,7 @@
 
 - Allow self-hosted and localhost Honcho setups to run without a Honcho API key.
 - Inject Honcho memory when OpenCode calls the system hook without prompt text, including stable no-prompt context refreshes.
+- Make the install command safe to re-run for updates by replacing stale Honcho `.tgz` and versioned plugin entries while preserving plugin options.
 
 ## 0.1.0
 

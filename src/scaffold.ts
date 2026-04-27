@@ -59,11 +59,18 @@ const ensurePluginSpec = (
   pluginSpec: string,
 ) => {
   if (isHonchoPluginSpec(pluginSpec)) {
+    const staleHonchoEntryWithOptions = plugins.find((entry) => {
+      const spec = typeof entry === "string" ? entry : entry[0]
+      return !HONCHO_TARBALL_PATTERN.test(spec) && isHonchoPluginSpec(spec) && Array.isArray(entry) && entry[1]
+    })
+    const nextHonchoEntry = Array.isArray(staleHonchoEntryWithOptions)
+      ? [pluginSpec, staleHonchoEntryWithOptions[1]]
+      : pluginSpec
     const pluginsWithoutStaleHoncho = plugins.filter((entry) => {
       const spec = typeof entry === "string" ? entry : entry[0]
       return !isHonchoPluginSpec(spec)
     })
-    return [...pluginsWithoutStaleHoncho, pluginSpec]
+    return [...pluginsWithoutStaleHoncho, nextHonchoEntry]
   }
   const packageName = stripPackageVersion(pluginSpec)
   if (

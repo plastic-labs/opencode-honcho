@@ -73,7 +73,7 @@ test("installGlobalConfig replaces stale Honcho plugin artifacts", async () => {
         plugin: [
           "/tmp/opencode-honcho/honcho-ai-opencode-honcho-0.1.3.tgz",
           "opencode-supermemory",
-          ["@honcho-ai/opencode-honcho@0.1.1", { enabled: true }],
+          ["@honcho-ai/opencode-honcho@0.1.1", { enabled: false, customOption: "keep" }],
         ],
       },
       null,
@@ -89,6 +89,6 @@ test("installGlobalConfig replaces stale Honcho plugin artifacts", async () => {
   const config = JSON.parse(await readFile(path.join(configDir, "opencode.json"), "utf-8"))
   expect(config.plugin).toEqual([
     "opencode-supermemory",
-    "@honcho-ai/opencode-honcho",
+    ["@honcho-ai/opencode-honcho", { enabled: false, customOption: "keep" }],
   ])
 })
