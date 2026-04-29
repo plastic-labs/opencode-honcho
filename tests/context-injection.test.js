@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test"
 import os from "node:os"
 import path from "node:path"
-import { mkdtemp } from "node:fs/promises"
+import { mkdtemp, readFile } from "node:fs/promises"
 
 import { createHonchoRuntimePlugin } from "../dist/index.js"
 
@@ -169,7 +169,7 @@ const runWithHarness = async (action, fetchOptions) => {
       HONCHO_BASE_URL: undefined,
     }, async () => {
       const hooks = await createPluginHarness(rootDir)
-      return action({ hooks, fetch })
+      return action({ hooks, fetch, homeDir })
     }),
   )
 }
@@ -276,5 +276,18 @@ test("system transform injects prompt-specific context for non-trivial prompt te
           call.search.get("search_query") === "memory-injection",
       ),
     ).toBe(true)
+  })
+})
+
+test("system transform writes injected memory snapshot for transcript export", async () => {
+  await runWithHarness(async ({ hooks, homeDir }) => {
+    const output = { system: [] }
+
+    await hooks["experimental.chat.system.transform"](systemInput({ query: "fix memory injection" }), output)
+
+    const snapshot = JSON.parse(await readFile(path.join(homeDir, ".honcho", "opencode-memory-snapshot.json"), "utf-8"))
+    expect(snapshot.latestSessionId).toBe("ses-test")
+    expect(snapshot.entries["ses-test"].context).toContain("Prompt memory for memory-injection")
+    expect(snapshot.entries["ses-test"].history.at(-1).query).toBe("fix memory injection")
   })
 })

@@ -90,18 +90,53 @@ test("status and settings messages are distinct surfaces", () => {
   assert.notEqual(__testing.statusMessage(settings), __testing.settingsMessage(settings))
 })
 
-test("native TUI Honcho commands register slash aliases for setup, status, settings, and config", () => {
+test("native TUI Honcho commands register slash aliases for setup, status, settings, config, and transcript export", () => {
   const commands = __testing.buildCommands({})
   assert.deepEqual(commands.map((command) => command.value), [
     "honcho.setup",
     "honcho.status",
     "honcho.settings",
     "honcho.config",
+    "honcho.transcript",
   ])
   assert.deepEqual(
     commands.map((command) => command.slash?.name),
-    ["honcho:setup", "honcho:status", "honcho:settings", "honcho:config"],
+    ["honcho:setup", "honcho:status", "honcho:settings", "honcho:config", "honcho:transcript"],
   )
+  assert.deepEqual(commands.at(-1).slash?.aliases, ["honcho:export-transcript"])
+})
+
+test("memory transcript formatter inserts injected memory below matching user message", () => {
+  const memory = __testing.memoryByMessageId({
+    history: [
+      {
+        messageId: "msg-user",
+        context: "## Agent Work Context\n- Working on transcript export",
+      },
+    ],
+  })
+
+  const transcript = __testing.formatMemoryTranscript(
+    {
+      id: "ses_225d52ae4ffeqsr6jhw5Jmbqtt",
+      time: { created: 0, updated: 1000 },
+    },
+    [
+      {
+        info: { id: "msg-user", role: "user" },
+        parts: [{ type: "text", text: "What have we been working on lately?" }],
+      },
+      {
+        info: { id: "msg-assistant", role: "assistant" },
+        parts: [{ type: "text", text: "OpenCode Honcho memory." }],
+      },
+    ],
+    memory,
+  )
+
+  assert.match(transcript, /# Honcho Memory Transcript/)
+  assert.match(transcript, /### Injected Honcho Memory/)
+  assert.match(transcript, /Working on transcript export/)
 })
 
 test("honcho config only exposes top-level and hosts.opencode fields", () => {
