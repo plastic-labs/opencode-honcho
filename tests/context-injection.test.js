@@ -201,7 +201,7 @@ test("system transform injects Honcho memory when OpenCode provides no prompt te
   })
 })
 
-test("system transform reuses stable context inside the stable refresh window", async () => {
+test("system transform skips repeated no-prompt injection inside the stable refresh window", async () => {
   await runWithHarness(async ({ hooks, fetch }) => {
     const firstOutput = { system: [] }
     await hooks["experimental.chat.system.transform"](systemInput(), firstOutput)
@@ -211,8 +211,7 @@ test("system transform reuses stable context inside the stable refresh window", 
     await hooks["experimental.chat.system.transform"](systemInput(), secondOutput)
 
     expect(firstOutput.system).toHaveLength(1)
-    expect(secondOutput.system).toHaveLength(1)
-    expect(secondOutput.system[0]).toContain("The user prefers concise engineering analysis.")
+    expect(secondOutput.system).toEqual([])
     expect(stableHydrationCallCount(fetch.calls)).toBe(hydrationCallCountAfterFirstInjection)
   })
 })
@@ -257,19 +256,14 @@ test("system transform retries no-prompt stable hydration when all context sourc
   }, { failStableHydration: true })
 })
 
-test("system transform injects stable context for explicit trivial prompt text", async () => {
+test("system transform still skips explicit trivial prompt text", async () => {
   await runWithHarness(async ({ hooks, fetch }) => {
     const output = { system: [] }
 
     await hooks["experimental.chat.system.transform"](systemInput({ query: "ok" }), output)
 
-    expect(output.system).toHaveLength(1)
-    expect(output.system[0]).toContain("The user prefers concise engineering analysis.")
-    expect(
-      fetch.calls.some(
-        (call) => call.method === "GET" && /\/sessions\/[^/]+\/context$/.test(call.pathname),
-      ),
-    ).toBe(false)
+    expect(output.system).toEqual([])
+    expect(fetch.calls).toHaveLength(0)
   })
 })
 

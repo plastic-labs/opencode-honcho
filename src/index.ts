@@ -1332,11 +1332,18 @@ export const createHonchoRuntimePlugin =
         const query = extractPromptQuery(input) || state.lastPromptQuery || ""
         const trimmedQuery = query.trim()
         const hasQuery = trimmedQuery.length > 0
-        const shouldRefreshStable = shouldInjectStableContext(state, INTERNAL_CONTEXT_REFRESH)
+        const promptIsTrivial = hasQuery && shouldSkipContextRetrieval(trimmedQuery, INTERNAL_CONTEXT_REFRESH)
+        if (promptIsTrivial) {
+          return
+        }
+        const shouldRefreshStable = !hasQuery && shouldInjectStableContext(state, INTERNAL_CONTEXT_REFRESH)
+        const shouldInjectCachedStable = hasQuery
         const shouldRefreshPrompt =
           hasQuery &&
-          !shouldSkipContextRetrieval(trimmedQuery, INTERNAL_CONTEXT_REFRESH) &&
           (handle.config.recallMode === "context" || handle.config.recallMode === "hybrid")
+        if (!shouldRefreshStable && !shouldInjectCachedStable && !shouldRefreshPrompt) {
+          return
+        }
         await withRuntime(input, async (runtime) => {
           const state = getState(deriveSessionStateKey(runtime))
           if (!state.stableContext || shouldRefreshStable) {
