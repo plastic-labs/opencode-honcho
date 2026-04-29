@@ -56,6 +56,7 @@ type SessionState = {
   stableContext: string | null
   cachedPromptContext: string | null
   lastInjectedContext: string | null
+  lastPromptQuery: string | null
   lastStableContextRefreshAt: number | null
   recentConclusions: string[]
   conclusionFingerprints: Set<string>
@@ -917,6 +918,7 @@ const createSessionState = (): SessionState => ({
   stableContext: null,
   cachedPromptContext: null,
   lastInjectedContext: null,
+  lastPromptQuery: null,
   lastStableContextRefreshAt: null,
   recentConclusions: [],
   conclusionFingerprints: new Set<string>(),
@@ -1310,6 +1312,7 @@ export const createHonchoRuntimePlugin =
         await withRuntime(input, async (runtime) => {
           const state = getState(deriveSessionStateKey(runtime))
           state.promptCount += 1
+          state.lastPromptQuery = message
           await captureMessage(runtime, runtime.userPeer, message, {
             source: "chat.message",
             sessionId: runtime.sessionId,
@@ -1325,30 +1328,28 @@ export const createHonchoRuntimePlugin =
         if (handle.config.recallMode === "tools" || !hasConfiguredAuth(handle.config)) {
           return
         }
-        const query = extractPromptQuery(input)
+        const state = getState(deriveSessionStateKey(handle))
+        const query = extractPromptQuery(input) || state.lastPromptQuery || ""
         const trimmedQuery = query.trim()
         const hasQuery = trimmedQuery.length > 0
-        const state = getState(deriveSessionStateKey(handle))
-        const shouldInjectStable = !hasQuery && shouldInjectStableContext(state, INTERNAL_CONTEXT_REFRESH)
-        const shouldSkip =
-          (hasQuery && shouldSkipContextRetrieval(trimmedQuery, INTERNAL_CONTEXT_REFRESH)) ||
-          (!hasQuery && !shouldInjectStable)
-        if (shouldSkip) {
-          return
-        }
+        const shouldRefreshStable = shouldInjectStableContext(state, INTERNAL_CONTEXT_REFRESH)
+        const shouldRefreshPrompt =
+          hasQuery &&
+          !shouldSkipContextRetrieval(trimmedQuery, INTERNAL_CONTEXT_REFRESH) &&
+          (handle.config.recallMode === "context" || handle.config.recallMode === "hybrid")
         await withRuntime(input, async (runtime) => {
           const state = getState(deriveSessionStateKey(runtime))
-          if (!state.stableContext || shouldInjectStable) {
+          if (!state.stableContext || shouldRefreshStable) {
             const stableContextHydrated = await hydrateSessionStartContext(runtime, state)
             if (stableContextHydrated) {
               state.lastStableContextRefreshAt = Date.now()
             }
-            if (shouldInjectStable && stableContextHydrated) {
+            if (shouldRefreshStable && stableContextHydrated) {
               state.promptCount = 0
             }
           }
           const promptContext =
-            hasQuery && (runtime.config.recallMode === "context" || runtime.config.recallMode === "hybrid")
+            shouldRefreshPrompt
               ? await refreshPromptContext(runtime, state, trimmedQuery)
               : null
           const compiledSections = [state.stableContext, promptContext].filter(
