@@ -56,6 +56,8 @@ type SessionState = {
   stableContext: string | null
   cachedPromptContext: string | null
   lastInjectedContext: string | null
+  lastPromptQuery: string | null
+  lastPromptMessageId: string | null
   lastStableContextRefreshAt: number | null
   recentConclusions: string[]
   conclusionFingerprints: Set<string>
@@ -96,9 +98,33 @@ type PeerTopology = {
 const SETTINGS_DIR_NAME = ".opencode"
 const SHARED_SETTINGS_DIR_NAME = ".honcho"
 const SHARED_SETTINGS_FILE_NAME = "config.json"
+const MEMORY_SNAPSHOT_FILE_NAME = "opencode-memory-snapshot.json"
 const LEGACY_API_KEY_FIELD = "apiKey"
 const RUNTIME_SERVICE = "opencode-honcho"
 const MAX_RECENT_CONCLUSIONS = 8
+
+type MemorySnapshotInjection = {
+  updatedAt: string
+  messageId?: string
+  query: string
+  context: string
+}
+
+type MemorySnapshotEntry = {
+  updatedAt: string
+  workspace: string
+  sessionId: string
+  sessionKey: string
+  recallMode: RecallMode
+  context: string
+  history: MemorySnapshotInjection[]
+}
+
+type MemorySnapshotFile = {
+  version: 1
+  latestSessionId?: string
+  entries: Record<string, MemorySnapshotEntry>
+}
 
 const DEFAULT_SETTINGS: HonchoSettings = {
   apiKey: "",
@@ -575,6 +601,8 @@ const sharedGlobalSettingsPath = () => {
   return path.join(userHomeDir(), SHARED_SETTINGS_DIR_NAME, SHARED_SETTINGS_FILE_NAME)
 }
 
+const memorySnapshotPath = () => path.join(userHomeDir(), SHARED_SETTINGS_DIR_NAME, MEMORY_SNAPSHOT_FILE_NAME)
+
 const readJsonFile = async (configPath: string) => {
   try {
     return JSON.parse(await readFile(configPath, "utf-8")) as Record<string, unknown>
@@ -587,6 +615,48 @@ const readJsonFile = async (configPath: string) => {
 }
 
 const readConfigFile = async (configPath: string) => normalizedRawSettings((await readJsonFile(configPath)) ?? {})
+
+const readMemorySnapshotFile = async (): Promise<MemorySnapshotFile> => {
+  const parsed = await readJsonFile(memorySnapshotPath())
+  if (!parsed || !isRecord(parsed.entries)) {
+    return { version: 1, entries: {} }
+  }
+  return parsed as MemorySnapshotFile
+}
+
+const writeMemorySnapshot = async (
+  runtime: RuntimeHandle,
+  injection: { messageId?: string; query: string; context: string },
+) => {
+  const snapshot = await readMemorySnapshotFile()
+  const updatedAt = new Date().toISOString()
+  const current = snapshot.entries[runtime.sessionId]
+  const history = [
+    ...(current?.history ?? []).filter(
+      (item) => !injection.messageId || item.messageId !== injection.messageId,
+    ),
+    {
+      updatedAt,
+      ...(injection.messageId ? { messageId: injection.messageId } : {}),
+      query: injection.query,
+      context: injection.context,
+    },
+  ].slice(-200)
+
+  snapshot.latestSessionId = runtime.sessionId
+  snapshot.entries[runtime.sessionId] = {
+    updatedAt,
+    workspace: runtime.workspaceId,
+    sessionId: runtime.sessionId,
+    sessionKey: runtime.sessionKey,
+    recallMode: runtime.config.recallMode,
+    context: injection.context,
+    history,
+  }
+
+  await mkdir(path.dirname(memorySnapshotPath()), { recursive: true })
+  await writeFile(memorySnapshotPath(), `${JSON.stringify(snapshot, null, 2)}\n`, "utf-8")
+}
 
 const envSettings = (): Record<string, unknown> => ({
   apiKey: process.env.HONCHO_API_KEY || "",
@@ -917,6 +987,8 @@ const createSessionState = (): SessionState => ({
   stableContext: null,
   cachedPromptContext: null,
   lastInjectedContext: null,
+  lastPromptQuery: null,
+  lastPromptMessageId: null,
   lastStableContextRefreshAt: null,
   recentConclusions: [],
   conclusionFingerprints: new Set<string>(),
@@ -1310,6 +1382,8 @@ export const createHonchoRuntimePlugin =
         await withRuntime(input, async (runtime) => {
           const state = getState(deriveSessionStateKey(runtime))
           state.promptCount += 1
+          state.lastPromptQuery = message
+          state.lastPromptMessageId = typeof input.messageID === "string" ? input.messageID : null
           await captureMessage(runtime, runtime.userPeer, message, {
             source: "chat.message",
             sessionId: runtime.sessionId,
@@ -1359,6 +1433,18 @@ export const createHonchoRuntimePlugin =
           }
           const compiled = compiledSections.join("\n\n")
           state.lastInjectedContext = compiled
+          try {
+            await writeMemorySnapshot(runtime, {
+              messageId: state.lastPromptMessageId ?? undefined,
+              query: trimmedQuery || state.lastPromptQuery || "",
+              context: compiled,
+            })
+          } catch (error) {
+            await log("warn", "Failed to write Honcho memory transcript snapshot.", {
+              sessionId: runtime.sessionId,
+              message: error instanceof Error ? error.message : String(error),
+            })
+          }
           output.system = output.system || []
           output.system.push(
             `## Honcho Memory\nUse this as persistent project and user memory. Prefer it over guessing, but only mention it when relevant to the current task.\n\n${compiled}`,

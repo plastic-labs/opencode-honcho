@@ -7,6 +7,7 @@ const PACKAGE_ID = "@honcho-ai/opencode-honcho"
 const DEFAULT_BASE_URL = "https://api.honcho.dev"
 const SHARED_SETTINGS_DIR_NAME = ".honcho"
 const SHARED_SETTINGS_FILE_NAME = "config.json"
+const MEMORY_SNAPSHOT_FILE_NAME = "opencode-memory-snapshot.json"
 
 const SHARED_CONFIG_PRESETS: Record<string, readonly string[]> = {
   recallmode: ["hybrid", "context", "tools"],
@@ -40,11 +41,75 @@ type GlobalSettings = {
   }
 }
 
+type MemorySnapshotInjection = {
+  updatedAt?: string
+  messageId?: string
+  query?: string
+  context?: string
+}
+
+type MemorySnapshotEntry = {
+  updatedAt?: string
+  workspace?: string
+  sessionId?: string
+  sessionKey?: string
+  recallMode?: string
+  context?: string
+  history?: MemorySnapshotInjection[]
+}
+
+type MemorySnapshot = {
+  latestSessionId?: string
+  entries?: Record<string, MemorySnapshotEntry>
+}
+
+type TranscriptSession = {
+  id: string
+  title?: string
+  time?: {
+    created?: number
+    updated?: number
+  }
+}
+
+type TranscriptMessage = {
+  id: string
+  role: "user" | "assistant"
+  agent?: string
+  modelID?: string
+  time?: {
+    created?: number
+    completed?: number
+  }
+}
+
+type TranscriptPart = {
+  type: string
+  text?: string
+  synthetic?: boolean
+  ignored?: boolean
+  tool?: string
+  state?: {
+    status?: string
+    input?: unknown
+    output?: string
+    error?: string
+  }
+}
+
+type TranscriptMessageWithParts = {
+  info: TranscriptMessage
+  parts: readonly TranscriptPart[]
+}
+
 const globalSettingsPath = () =>
   path.join(process.env.HOME || process.env.USERPROFILE || homedir(), SHARED_SETTINGS_DIR_NAME, SHARED_SETTINGS_FILE_NAME)
 
 const sharedConfigPath = () =>
   path.join(process.env.HOME || process.env.USERPROFILE || homedir(), SHARED_SETTINGS_DIR_NAME, SHARED_SETTINGS_FILE_NAME)
+
+const memorySnapshotPath = () =>
+  path.join(process.env.HOME || process.env.USERPROFILE || homedir(), SHARED_SETTINGS_DIR_NAME, MEMORY_SNAPSHOT_FILE_NAME)
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value)
@@ -82,6 +147,18 @@ const readSharedConfig = async (): Promise<Record<string, unknown> | null> => {
       throw new Error(`${configPath} must contain a JSON object at the top level.`)
     }
     return parsed
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return null
+    }
+    throw error
+  }
+}
+
+const readMemorySnapshot = async (): Promise<MemorySnapshot | null> => {
+  try {
+    const parsed = JSON.parse(await readFile(memorySnapshotPath(), "utf-8"))
+    return isRecord(parsed) ? (parsed as MemorySnapshot) : null
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       return null
@@ -236,6 +313,97 @@ const settingsMessage = (settings: GlobalSettings) => {
     `Recall mode: ${host.recallMode || "hybrid"}`,
     `Session strategy: ${host.sessionStrategy || "per-directory"}`,
   ].join("\n")
+}
+
+const titleCase = (value: string) =>
+  value ? `${value.slice(0, 1).toUpperCase()}${value.slice(1)}` : value
+
+const safeFileSegment = (value: string) => value.replace(/[^a-zA-Z0-9_-]+/g, "-").replace(/^-+|-+$/g, "") || "session"
+
+const transcriptPath = (sessionID: string, directory: string) =>
+  path.join(directory, `session-${safeFileSegment(sessionID).slice(0, 8)}-honcho-memory.md`)
+
+const memoryByMessageId = (entry?: MemorySnapshotEntry) => {
+  const pairs = (entry?.history ?? [])
+    .filter((item) => typeof item.messageId === "string" && item.messageId && typeof item.context === "string")
+    .map((item) => [item.messageId as string, item.context as string] as const)
+  return new Map(pairs)
+}
+
+const formatTranscriptPart = (part: TranscriptPart) => {
+  if (part.type === "text" && !part.synthetic && !part.ignored && part.text) {
+    return `${part.text}\n\n`
+  }
+  if (part.type === "tool" && part.tool) {
+    return `**Tool: ${part.tool}**\n\n`
+  }
+  return ""
+}
+
+const formatAssistantHeader = (message: TranscriptMessage) => {
+  const duration =
+    message.time?.completed && message.time.created
+      ? ` · ${((message.time.completed - message.time.created) / 1000).toFixed(1)}s`
+      : ""
+  const metadata = [message.agent ? titleCase(message.agent) : null, message.modelID].filter(Boolean).join(" · ")
+  return metadata ? `## Assistant (${metadata}${duration})\n\n` : "## Assistant\n\n"
+}
+
+const formatTranscriptMessage = (message: TranscriptMessageWithParts, memory: Map<string, string>) => {
+  const body = message.parts.map(formatTranscriptPart).join("")
+  if (message.info.role === "user") {
+    const context = memory.get(message.info.id)
+    return [`## User\n\n${body}`, context ? `### Injected Honcho Memory\n\n${context}\n\n` : ""].join("")
+  }
+  return `${formatAssistantHeader(message.info)}${body}`
+}
+
+const formatMemoryTranscript = (
+  session: TranscriptSession,
+  messages: readonly TranscriptMessageWithParts[],
+  memory: Map<string, string>,
+) => [
+  "# Honcho Memory Transcript",
+  "",
+  `**Session ID:** ${session.id}`,
+  `**Created:** ${new Date(session.time?.created ?? Date.now()).toLocaleString()}`,
+  `**Updated:** ${new Date(session.time?.updated ?? Date.now()).toLocaleString()}`,
+  "",
+  "---",
+  "",
+  ...messages.flatMap((message) => [formatTranscriptMessage(message, memory).trimEnd(), "---", ""]),
+].join("\n")
+
+const loadTranscriptSession = async (api: Parameters<TuiPlugin>[0], sessionID: string): Promise<TranscriptSession> => {
+  const result = await api.client.session.get({ sessionID })
+  if (result.error) {
+    throw new Error("Could not load the current OpenCode session.")
+  }
+  return result.data
+}
+
+const loadTranscriptMessages = async (
+  api: Parameters<TuiPlugin>[0],
+  sessionID: string,
+): Promise<TranscriptMessageWithParts[]> => {
+  const result = await api.client.session.messages({ sessionID })
+  if (result.error) {
+    throw new Error("Could not load OpenCode session messages.")
+  }
+  return result.data.map((message) => ({ info: message.info, parts: message.parts }))
+}
+
+const exportMemoryTranscript = async (api: Parameters<TuiPlugin>[0], sessionID: string) => {
+  const snapshot = await readMemorySnapshot()
+  const session = await loadTranscriptSession(api, sessionID)
+  const messages = await loadTranscriptMessages(api, sessionID)
+  const filePath = transcriptPath(sessionID, api.state.path.directory || api.state.path.worktree || process.cwd())
+  await writeFile(
+    filePath,
+    `${formatMemoryTranscript(session, messages, memoryByMessageId(snapshot?.entries?.[sessionID]))}\n`,
+    "utf-8",
+  )
+  return filePath
 }
 
 const saveSettings = async (partial: Partial<GlobalSettings>) => {
@@ -502,6 +670,39 @@ const openModeDialog = async (api: Parameters<TuiPlugin>[0]) => {
   )
 }
 
+const openTranscriptExportDialog = async (api: Parameters<TuiPlugin>[0]) => {
+  const sessionID =
+    api.route?.current?.name === "session" && typeof api.route.current.params?.sessionID === "string"
+      ? api.route.current.params.sessionID
+      : undefined
+  if (!sessionID) {
+    api.ui.dialog.replace(() =>
+      api.ui.DialogAlert({
+        title: "Honcho transcript export unavailable",
+        message: "Open a session before exporting a Honcho memory transcript.",
+      }),
+    )
+    return
+  }
+
+  try {
+    const filePath = await exportMemoryTranscript(api, sessionID)
+    api.ui.dialog.replace(() =>
+      api.ui.DialogAlert({
+        title: "Honcho transcript exported",
+        message: `Saved transcript with injected memory to ${filePath}`,
+      }),
+    )
+  } catch (error) {
+    api.ui.dialog.replace(() =>
+      api.ui.DialogAlert({
+        title: "Honcho transcript export failed",
+        message: error instanceof Error ? error.message : String(error),
+      }),
+    )
+  }
+}
+
 const openSetupDialog = (api: Parameters<TuiPlugin>[0]) => {
   api.ui.dialog.replace(() =>
     api.ui.DialogSelect({
@@ -577,6 +778,19 @@ const buildCommands = (api: Parameters<TuiPlugin>[0]) => [
       void openModeDialog(api)
     },
   },
+  {
+    title: "Honcho Transcript",
+    value: "honcho.transcript",
+    description: "Export the current transcript with injected Honcho memory blocks",
+    category: "Honcho",
+    slash: {
+      name: "honcho:transcript",
+      aliases: ["honcho:export-transcript"],
+    },
+    onSelect: () => {
+      void openTranscriptExportDialog(api)
+    },
+  },
 ]
 
 const tui: TuiPlugin = async (api) => {
@@ -593,6 +807,7 @@ export const __testing = {
   deriveLiveStatus,
   normalizeSettings,
   modeEditableFieldPaths,
+  memoryByMessageId,
   readSharedConfig,
   resolveSharedConfigField,
   saveSettings,
@@ -600,6 +815,8 @@ export const __testing = {
   sharedConfigPath,
   sharedConfigPresetOptions,
   statusMessage,
+  formatMemoryTranscript,
+  transcriptPath,
   validateCloudApiKey,
 }
 
