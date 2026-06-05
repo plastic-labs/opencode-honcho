@@ -5,7 +5,7 @@ import { __testing } from "../dist/index.js"
 test("root sessions keep user and root agent as peers", () => {
   const topology = __testing.buildPeerTopology({
     config: {},
-    userPeerId: "user:user",
+    userPeerId: "user",
     rootAgentPeerId: "opencode",
     activeAgentPeerId: "opencode",
     childAgentPeerId: null,
@@ -13,7 +13,7 @@ test("root sessions keep user and root agent as peers", () => {
   })
 
   expect(topology.sessionPeerConfigs).toEqual({
-    "user:user": { observeMe: true, observeOthers: false },
+    "user": { observeMe: true, observeOthers: false },
     opencode: { observeMe: true, observeOthers: true },
   })
   expect(topology.describedPeers.childAgentPeer).toBeNull()
@@ -23,7 +23,7 @@ test("root sessions keep user and root agent as peers", () => {
 test("classic peer model keeps delegated sessions on the Claude-style user and ai peers", () => {
   const topology = __testing.buildPeerTopology({
     config: {},
-    userPeerId: "user:user",
+    userPeerId: "user",
     rootAgentPeerId: "opencode",
     activeAgentPeerId: "opencode:reviewer",
     childAgentPeerId: "opencode:reviewer",
@@ -31,7 +31,7 @@ test("classic peer model keeps delegated sessions on the Claude-style user and a
   })
 
   expect(topology.sessionPeerConfigs).toEqual({
-    "user:user": { observeMe: true, observeOthers: false },
+    "user": { observeMe: true, observeOthers: false },
     opencode: { observeMe: true, observeOthers: true },
   })
   expect(topology.describedPeers.childAgentPeer).toBeNull()

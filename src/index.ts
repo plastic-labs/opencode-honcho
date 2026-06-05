@@ -616,6 +616,9 @@ const writeSettings = async (
 
 const currentUserName = () => "user"
 
+const deriveUserPeerId = (settings: Pick<HonchoSettings, "peerName">) =>
+  normalizeId(settings.peerName || currentUserName())
+
 const rootApiKey = (raw: Record<string, unknown>) => {
   const legacyApiKey = typeof raw[LEGACY_API_KEY_FIELD] === "string" ? expandEnv(raw[LEGACY_API_KEY_FIELD] as string) : ""
   return legacyApiKey
@@ -754,7 +757,7 @@ const deriveRuntimeHandle = async (
   const sessionId = extractSessionId(input)
   const repoName = path.basename(rootDir)
   const workspaceId = normalizeId(settings.workspace || "opencode")
-  const userPeerId = normalizeId(`user:${settings.peerName || currentUserName()}`)
+  const userPeerId = deriveUserPeerId(settings)
   const rootAgentPeerId = normalizeId(settings.aiPeer || "opencode")
   const activeAgentPeerId = rootAgentPeerId
   const childAgentPeerId = null
@@ -1667,6 +1670,7 @@ export const createHonchoRuntimePlugin =
 export const HonchoRuntimePlugin = createHonchoRuntimePlugin()
 export const __testing = {
   createSessionState,
+  deriveUserPeerId,
   deriveSessionStateKey,
   extractCompletedAssistantMessage,
   honchoSdkImportPath: "@honcho-ai/sdk",
