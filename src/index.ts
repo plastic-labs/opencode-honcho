@@ -619,6 +619,14 @@ const currentUserName = () => "user"
 const deriveUserPeerId = (settings: Pick<HonchoSettings, "peerName">) =>
   normalizeId(settings.peerName || currentUserName())
 
+const assertDistinctUserAndAgentPeers = (userPeerId: string, rootAgentPeerId: string) => {
+  if (userPeerId === rootAgentPeerId) {
+    throw new Error(
+      `Invalid Honcho config: peerName and aiPeer both resolve to the peer id '${userPeerId}'; they must differ so user and agent memory stay separate.`,
+    )
+  }
+}
+
 const rootApiKey = (raw: Record<string, unknown>) => {
   const legacyApiKey = typeof raw[LEGACY_API_KEY_FIELD] === "string" ? expandEnv(raw[LEGACY_API_KEY_FIELD] as string) : ""
   return legacyApiKey
@@ -759,6 +767,7 @@ const deriveRuntimeHandle = async (
   const workspaceId = normalizeId(settings.workspace || "opencode")
   const userPeerId = deriveUserPeerId(settings)
   const rootAgentPeerId = normalizeId(settings.aiPeer || "opencode")
+  assertDistinctUserAndAgentPeers(userPeerId, rootAgentPeerId)
   const activeAgentPeerId = rootAgentPeerId
   const childAgentPeerId = null
   const parentAgentObserverPeerId = null
@@ -1671,6 +1680,7 @@ export const HonchoRuntimePlugin = createHonchoRuntimePlugin()
 export const __testing = {
   createSessionState,
   deriveUserPeerId,
+  assertDistinctUserAndAgentPeers,
   deriveSessionStateKey,
   extractCompletedAssistantMessage,
   honchoSdkImportPath: "@honcho-ai/sdk",
