@@ -75,7 +75,8 @@ OpenCode reads and writes this shared config file directly. OpenCode-specific de
       "workspace": "opencode",
       "aiPeer": "opencode",
       "recallMode": "hybrid",
-      "sessionStrategy": "per-directory"
+      "sessionStrategy": "per-directory",
+      "removeUserPrefix": true // true uses the bare peerName; false (default on upgrade) keeps the legacy user-<peerName> peer
     }
   }
 }
