@@ -26,9 +26,12 @@ type HonchoSettings = {
   workspace: string
   recallMode: RecallMode
   sessionStrategy: SessionStrategy
+  removeUserPrefix: boolean
 }
 
-type HostScopedSettings = Partial<Pick<HonchoSettings, "workspace" | "aiPeer" | "recallMode" | "sessionStrategy">>
+type HostScopedSettings = Partial<
+  Pick<HonchoSettings, "workspace" | "aiPeer" | "recallMode" | "sessionStrategy" | "removeUserPrefix">
+>
 
 type RuntimeHandle = {
   rootDir: string
@@ -108,6 +111,10 @@ const DEFAULT_SETTINGS: HonchoSettings = {
   workspace: "opencode",
   recallMode: "hybrid",
   sessionStrategy: "per-directory",
+  // Default false for everyone, including upgrading installs: an existing user
+  // keeps their `user-<peerName>` peer and its memory. New installs are stamped
+  // true at config creation, and anyone can opt in by setting it true.
+  removeUserPrefix: false,
 }
 
 const INTERNAL_DIALECTIC_REASONING_LEVEL: DialecticReasoningLevel = "low"
@@ -121,7 +128,7 @@ const INTERNAL_CONTEXT_REFRESH: ContextRefreshSettings = {
   useSessionStartDialectic: true,
 }
 
-const BOOLEAN_KEYS = new Set<keyof HonchoSettings>([])
+const BOOLEAN_KEYS = new Set<keyof HonchoSettings>(["removeUserPrefix"])
 
 const NUMBER_KEYS = new Set<keyof HonchoSettings>([])
 
@@ -133,7 +140,13 @@ const ENUM_KEYS: Record<string, ReadonlySet<string>> = {
 const INHERITABLE_STRING_KEYS = new Set<keyof HonchoSettings>(["apiKey", "baseUrl", "peerName", "aiPeer", "workspace"])
 
 const TOP_LEVEL_SETTING_FIELDS = new Set<keyof HonchoSettings>(["apiKey", "baseUrl", "peerName"])
-const HOST_SETTING_FIELDS = new Set<keyof HonchoSettings>(["workspace", "aiPeer", "recallMode", "sessionStrategy"])
+const HOST_SETTING_FIELDS = new Set<keyof HonchoSettings>([
+  "workspace",
+  "aiPeer",
+  "recallMode",
+  "sessionStrategy",
+  "removeUserPrefix",
+])
 
 const SETTING_FIELD_PATHS = new Set([
   "apiKey",
@@ -143,6 +156,7 @@ const SETTING_FIELD_PATHS = new Set([
   "workspace",
   "recallMode",
   "sessionStrategy",
+  "removeUserPrefix",
 ])
 
 const DURABLE_PATTERNS = [
@@ -616,8 +630,13 @@ const writeSettings = async (
 
 const currentUserName = () => "user"
 
-const deriveUserPeerId = (settings: Pick<HonchoSettings, "peerName">) =>
-  normalizeId(settings.peerName || currentUserName())
+const deriveUserPeerId = (settings: Pick<HonchoSettings, "peerName" | "removeUserPrefix">) => {
+  const name = settings.peerName || currentUserName()
+  // removeUserPrefix=true drops the `user-` prefix to match the sibling
+  // claude-honcho / hermes-honcho plugins; false (the legacy-safe default)
+  // keeps the historical `user-<name>` peer and its accumulated memory.
+  return settings.removeUserPrefix ? normalizeId(name) : normalizeId(`user:${name}`)
+}
 
 const assertDistinctUserAndAgentPeers = (userPeerId: string, rootAgentPeerId: string) => {
   if (userPeerId === rootAgentPeerId) {
@@ -640,6 +659,7 @@ const hostDefaults = (settings: HonchoSettings): Record<string, unknown> => {
     aiPeer,
     recallMode: settings.recallMode,
     sessionStrategy: settings.sessionStrategy,
+    removeUserPrefix: settings.removeUserPrefix,
   }
 }
 
@@ -664,11 +684,15 @@ const ensureSharedGlobalSettings = async (configPath = sharedGlobalSettingsPath(
   if (sharedRaw) {
     next = currentShared
   } else {
+    // Brand-new install (no prior config): ship removeUserPrefix=true so new
+    // users get the bare `<peerName>` peer. Existing configs take the `if` branch
+    // untouched and fall back to the false default, preserving their `user-<name>`
+    // peer.
     next = {
       peerName: currentUserName(),
       baseUrl: mergedHostSettings.baseUrl,
       hosts: {
-        opencode: hostDefaults(mergedHostSettings),
+        opencode: { ...hostDefaults(mergedHostSettings), removeUserPrefix: true },
       },
     }
     await writeSharedGlobalSettings(configPath, next)
@@ -1074,6 +1098,7 @@ export const createHonchoRuntimePlugin =
         recallMode: handle.config.recallMode,
         sessionStrategy: handle.config.sessionStrategy,
         peerName: handle.config.peerName,
+        removeUserPrefix: handle.config.removeUserPrefix,
         configured: hasConfiguredAuth(handle.config),
         localMode: isLocalBaseUrl(handle.config.baseUrl),
         baseUrl: handle.config.baseUrl,

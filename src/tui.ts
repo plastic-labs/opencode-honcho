@@ -24,6 +24,7 @@ const MODE_EDITABLE_FIELD_PATHS = [
   "hosts.opencode.aiPeer",
   "hosts.opencode.recallMode",
   "hosts.opencode.sessionStrategy",
+  "hosts.opencode.removeUserPrefix",
 ] as const
 
 type GlobalSettings = {
@@ -36,6 +37,7 @@ type GlobalSettings = {
       aiPeer?: string
       recallMode?: "hybrid" | "context" | "tools"
       sessionStrategy?: "per-repo" | "per-directory" | "per-session" | "global" | "git-branch" | "chat-instance"
+      removeUserPrefix?: boolean
     }
   }
 }
@@ -240,7 +242,8 @@ const settingsMessage = (settings: GlobalSettings) => {
 
 const saveSettings = async (partial: Partial<GlobalSettings>) => {
   const current = await readGlobalSettings()
-  const sharedRaw = (await readSharedConfig()) ?? {}
+  const existingSharedConfig = await readSharedConfig()
+  const sharedRaw = existingSharedConfig ?? {}
   const partialHost = partial.hosts?.opencode
   const nextApiKey =
     typeof partial.apiKey === "string"
@@ -256,12 +259,19 @@ const saveSettings = async (partial: Partial<GlobalSettings>) => {
         : "user"
   const currentHosts = isRecord(sharedRaw.hosts) ? { ...sharedRaw.hosts } : {}
   const currentOpenCodeHost = isRecord(currentHosts.opencode) ? currentHosts.opencode : {}
+  // New install (no prior shared config) ships removeUserPrefix=true; an existing
+  // config keeps whatever it had, defaulting to false so upgraders aren't moved
+  // off their `user-<peerName>` peer.
+  const existingRemoveUserPrefix = current.hosts?.opencode?.removeUserPrefix
   currentHosts.opencode = {
     ...currentOpenCodeHost,
     workspace: partialHost?.workspace ?? current.hosts?.opencode?.workspace ?? "opencode",
     aiPeer: partialHost?.aiPeer ?? current.hosts?.opencode?.aiPeer ?? "opencode",
     recallMode: partialHost?.recallMode ?? current.hosts?.opencode?.recallMode ?? "hybrid",
     sessionStrategy: partialHost?.sessionStrategy ?? current.hosts?.opencode?.sessionStrategy ?? "per-directory",
+    removeUserPrefix:
+      partialHost?.removeUserPrefix ??
+      (typeof existingRemoveUserPrefix === "boolean" ? existingRemoveUserPrefix : !existingSharedConfig),
   }
 
   const next: GlobalSettings & Record<string, unknown> = {

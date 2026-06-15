@@ -96,9 +96,9 @@ const createHonchoFetch = ({ failStableHydration = false } = {}) => {
       return jsonResponse({
         peer_id: peerId,
         target_id: null,
-        representation: peerId === "user"
-          ? "The user prefers concise engineering analysis."
-          : "The assistant is working on opencode-honcho.",
+        representation: peerId === "opencode"
+          ? "The assistant is working on opencode-honcho."
+          : "The user prefers concise engineering analysis.",
         peer_card: ["Keep changes narrowly scoped."],
       })
     }
