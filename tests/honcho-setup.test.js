@@ -716,3 +716,30 @@ test("upgrading install (existing config) keeps removeUserPrefix=false and the u
     expect(persisted).toEqual(initialConfig)
   })
 })
+
+test("a string removeUserPrefix is coerced at read time (a stray \"false\" stays on the prefixed peer)", async () => {
+  const rootDir = await mkdtemp(path.join(os.tmpdir(), "honcho-coerce-root-"))
+  const homeDir = await mkdtemp(path.join(os.tmpdir(), "honcho-coerce-home-"))
+  await mkdir(path.join(homeDir, ".honcho"), { recursive: true })
+  const cfg = path.join(homeDir, ".honcho", "config.json")
+
+  await withEnv({ HOME: homeDir, USER: "ignored-user", XDG_CONFIG_HOME: undefined }, async () => {
+    await writeFile(cfg, JSON.stringify({ peerName: "alice", hosts: { opencode: { removeUserPrefix: "false" } } }))
+    const result = JSON.parse(await (await createPluginHarness(rootDir)).tool.honcho_status.execute({}, toolContext(rootDir)))
+    expect(result.peers.userPeer.id).toBe("user-alice")
+  })
+})
+
+test("bare peer colliding with the agent peer falls back to the prefix instead of throwing", async () => {
+  const rootDir = await mkdtemp(path.join(os.tmpdir(), "honcho-collide-root-"))
+  const homeDir = await mkdtemp(path.join(os.tmpdir(), "honcho-collide-home-"))
+  await mkdir(path.join(homeDir, ".honcho"), { recursive: true })
+  const cfg = path.join(homeDir, ".honcho", "config.json")
+
+  await withEnv({ HOME: homeDir, USER: "ignored-user", XDG_CONFIG_HOME: undefined }, async () => {
+    await writeFile(cfg, JSON.stringify({ peerName: "opencode", hosts: { opencode: { aiPeer: "opencode", removeUserPrefix: true } } }))
+    const result = JSON.parse(await (await createPluginHarness(rootDir)).tool.honcho_status.execute({}, toolContext(rootDir)))
+    expect(result.ok).toBe(true)
+    expect(result.peers.userPeer.id).toBe("user-opencode")
+  })
+})

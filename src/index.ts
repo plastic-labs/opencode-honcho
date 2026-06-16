@@ -369,6 +369,14 @@ const applyRawLayer = (target: HonchoSettings, raw: Record<string, unknown>) => 
     if (value === undefined || value === null) {
       continue
     }
+    if (BOOLEAN_KEYS.has(key)) {
+      // Coerce booleans at the read boundary: a config (or hand-edit, which the
+      // README invites) may carry the string "true"/"false". Only true/"true" is
+      // true, so a stray "false" can't be truthy and silently flip the prefix.
+      ;(target as Record<string, unknown>)[key] =
+        value === true || (typeof value === "string" && value.trim().toLowerCase() === "true")
+      continue
+    }
     if (typeof value === "string") {
       const expanded = expandEnv(value)
       if (INHERITABLE_STRING_KEYS.has(key) && !expanded.trim()) {
@@ -789,8 +797,15 @@ const deriveRuntimeHandle = async (
   const sessionId = extractSessionId(input)
   const repoName = path.basename(rootDir)
   const workspaceId = normalizeId(settings.workspace || "opencode")
-  const userPeerId = deriveUserPeerId(settings)
   const rootAgentPeerId = normalizeId(settings.aiPeer || "opencode")
+  // If the bare form collides with the agent peer (peerName === aiPeer), fall back
+  // to the prefixed form to keep user and agent memory distinct, rather than
+  // throwing on this hot path (deriveRuntimeHandle runs in unguarded hooks).
+  // assertDistinct only fires for a genuinely unresolvable config.
+  let userPeerId = deriveUserPeerId(settings)
+  if (userPeerId === rootAgentPeerId) {
+    userPeerId = normalizeId(`user:${settings.peerName || currentUserName()}`)
+  }
   assertDistinctUserAndAgentPeers(userPeerId, rootAgentPeerId)
   const activeAgentPeerId = rootAgentPeerId
   const childAgentPeerId = null
