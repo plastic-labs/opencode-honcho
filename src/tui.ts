@@ -139,20 +139,32 @@ const resolveSharedConfigField = (config: Record<string, unknown>, field: string
 
 const modeEditableFieldPaths = () => [...MODE_EDITABLE_FIELD_PATHS]
 
+// Fields that are always booleans, keyed by their final path segment. Editing
+// these must coerce to a real boolean even when the field is currently absent
+// (e.g. upgrade configs without removeUserPrefix), where currentValue is
+// undefined and a runtime-type check alone would persist the raw "true"/"false"
+// string.
+const BOOLEAN_FIELD_KEYS = new Set(["removeuserprefix"])
+
+const fieldKey = (fieldPath: string) => fieldPath.split(".").at(-1)?.toLowerCase() || fieldPath.toLowerCase()
+
+const isBooleanField = (fieldPath: string, currentValue: unknown) =>
+  typeof currentValue === "boolean" || BOOLEAN_FIELD_KEYS.has(fieldKey(fieldPath))
+
 const sharedConfigPresetOptions = (fieldPath: string, currentValue: unknown) => {
-  const presetKey = fieldPath.split(".").at(-1)?.toLowerCase() || fieldPath.toLowerCase()
+  const presetKey = fieldKey(fieldPath)
   if (SHARED_CONFIG_PRESETS[presetKey]) {
     return [...SHARED_CONFIG_PRESETS[presetKey]]
   }
-  if (typeof currentValue === "boolean") {
+  if (isBooleanField(fieldPath, currentValue)) {
     return ["true", "false"]
   }
   return []
 }
 
-const parseSharedConfigValue = (currentValue: unknown, rawValue: string) => {
+const parseSharedConfigValue = (fieldPath: string, currentValue: unknown, rawValue: string) => {
   const trimmed = rawValue.trim()
-  if (typeof currentValue === "boolean") {
+  if (isBooleanField(fieldPath, currentValue)) {
     return trimmed.toLowerCase() === "true"
   }
   if (typeof currentValue === "number") {
@@ -416,7 +428,7 @@ const openModeValueDialog = async (
   const persistValue = async (rawValue: string) => {
     try {
       const nextConfig = structuredClone(config)
-      const nextValue = parseSharedConfigValue(currentValue, rawValue)
+      const nextValue = parseSharedConfigValue(fieldPath, currentValue, rawValue)
       setNestedValue(nextConfig, fieldPath, nextValue)
       const configPath = await writeSharedConfig(nextConfig)
       api.ui.dialog.replace(() =>
@@ -605,6 +617,7 @@ export const __testing = {
   modeEditableFieldPaths,
   readSharedConfig,
   resolveSharedConfigField,
+  parseSharedConfigValue,
   saveSettings,
   settingsMessage,
   sharedConfigPath,
