@@ -4,3 +4,4 @@ node_modules/
 *.tgz
 npm-debug.log*
 .opencode/
+vendor/

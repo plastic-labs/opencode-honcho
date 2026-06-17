@@ -130,8 +130,6 @@ const INTERNAL_CONTEXT_REFRESH: ContextRefreshSettings = {
 
 const BOOLEAN_KEYS = new Set<keyof HonchoSettings>(["removeUserPrefix"])
 
-const NUMBER_KEYS = new Set<keyof HonchoSettings>([])
-
 const ENUM_KEYS: Record<string, ReadonlySet<string>> = {
   recallMode: new Set(["hybrid", "context", "tools"]),
   sessionStrategy: new Set(["per-repo", "per-directory", "per-session", "global", "git-branch", "chat-instance"]),
@@ -324,21 +322,9 @@ const coerceBoolean = (value: unknown) => {
   throw new Error(`Expected boolean value, received ${JSON.stringify(value)}`)
 }
 
-const coerceNumber = (value: unknown) => {
-  if (typeof value === "number" && Number.isFinite(value)) return value
-  if (typeof value === "string" && value.trim()) {
-    const parsed = Number(value)
-    if (Number.isFinite(parsed)) return parsed
-  }
-  throw new Error(`Expected numeric value, received ${JSON.stringify(value)}`)
-}
-
 const parseSettingValue = (fieldPath: string, raw: string): unknown => {
   if (BOOLEAN_KEYS.has(fieldPath as keyof HonchoSettings)) {
     return coerceBoolean(raw)
-  }
-  if (NUMBER_KEYS.has(fieldPath as keyof HonchoSettings)) {
-    return coerceNumber(raw)
   }
   if (fieldPath in ENUM_KEYS && !ENUM_KEYS[fieldPath].has(raw)) {
     throw new Error(`Unsupported ${fieldPath} value '${raw}'`)
