@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.3
+
+- Add `hosts.opencode.removeUserPrefix` to control how the user peer id is derived. New installs use the bare `<peerName>` to match the sibling claude-honcho / hermes-honcho plugins, while existing installs default to the legacy `user-<peerName>` peer so previously accumulated memory is never orphaned on upgrade.
+- Enforce distinct user and agent peer ids to prevent collisions that would split memory across peers.
+- Refactoring and cleanup work.
+
 ## 0.1.2
 
 - Allow self-hosted and localhost Honcho setups to run without a Honcho API key.
