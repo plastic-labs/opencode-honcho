@@ -113,18 +113,9 @@ test("honcho config only exposes top-level and hosts.opencode fields", () => {
     "hosts.opencode.aiPeer",
     "hosts.opencode.recallMode",
     "hosts.opencode.sessionStrategy",
-    "hosts.opencode.removeUserPrefix",
   ])
   assert.equal(__testing.modeEditableFieldPaths().includes("hosts.claude_code.workspace"), false)
   assert.equal(__testing.modeEditableFieldPaths().includes("hosts.other.aiPeer"), false)
-})
-
-test("editing removeUserPrefix persists a boolean even when the field is initially absent", () => {
-  // Upgrade config: field missing -> currentValue is undefined.
-  assert.strictEqual(__testing.parseSharedConfigValue("hosts.opencode.removeUserPrefix", undefined, "true"), true)
-  assert.strictEqual(__testing.parseSharedConfigValue("hosts.opencode.removeUserPrefix", undefined, "false"), false)
-  // And it still offers true/false options when the value is absent.
-  assert.deepEqual(__testing.sharedConfigPresetOptions("hosts.opencode.removeUserPrefix", undefined), ["true", "false"])
 })
 
 test("shared config field resolution is case-insensitive and preserves canonical paths", () => {

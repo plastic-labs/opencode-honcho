@@ -24,7 +24,6 @@ const MODE_EDITABLE_FIELD_PATHS = [
   "hosts.opencode.aiPeer",
   "hosts.opencode.recallMode",
   "hosts.opencode.sessionStrategy",
-  "hosts.opencode.removeUserPrefix",
 ] as const
 
 type GlobalSettings = {
@@ -37,7 +36,6 @@ type GlobalSettings = {
       aiPeer?: string
       recallMode?: "hybrid" | "context" | "tools"
       sessionStrategy?: "per-repo" | "per-directory" | "per-session" | "global" | "git-branch" | "chat-instance"
-      removeUserPrefix?: boolean
     }
   }
 }
@@ -139,32 +137,20 @@ const resolveSharedConfigField = (config: Record<string, unknown>, field: string
 
 const modeEditableFieldPaths = () => [...MODE_EDITABLE_FIELD_PATHS]
 
-// Fields that are always booleans, keyed by their final path segment. Editing
-// these must coerce to a real boolean even when the field is currently absent
-// (e.g. upgrade configs without removeUserPrefix), where currentValue is
-// undefined and a runtime-type check alone would persist the raw "true"/"false"
-// string.
-const BOOLEAN_FIELD_KEYS = new Set(["removeuserprefix"])
-
-const fieldKey = (fieldPath: string) => fieldPath.split(".").at(-1)?.toLowerCase() || fieldPath.toLowerCase()
-
-const isBooleanField = (fieldPath: string, currentValue: unknown) =>
-  typeof currentValue === "boolean" || BOOLEAN_FIELD_KEYS.has(fieldKey(fieldPath))
-
 const sharedConfigPresetOptions = (fieldPath: string, currentValue: unknown) => {
-  const presetKey = fieldKey(fieldPath)
+  const presetKey = fieldPath.split(".").at(-1)?.toLowerCase() || fieldPath.toLowerCase()
   if (SHARED_CONFIG_PRESETS[presetKey]) {
     return [...SHARED_CONFIG_PRESETS[presetKey]]
   }
-  if (isBooleanField(fieldPath, currentValue)) {
+  if (typeof currentValue === "boolean") {
     return ["true", "false"]
   }
   return []
 }
 
-const parseSharedConfigValue = (fieldPath: string, currentValue: unknown, rawValue: string) => {
+const parseSharedConfigValue = (currentValue: unknown, rawValue: string) => {
   const trimmed = rawValue.trim()
-  if (isBooleanField(fieldPath, currentValue)) {
+  if (typeof currentValue === "boolean") {
     return trimmed.toLowerCase() === "true"
   }
   if (typeof currentValue === "number") {
@@ -254,8 +240,7 @@ const settingsMessage = (settings: GlobalSettings) => {
 
 const saveSettings = async (partial: Partial<GlobalSettings>) => {
   const current = await readGlobalSettings()
-  const existingSharedConfig = await readSharedConfig()
-  const sharedRaw = existingSharedConfig ?? {}
+  const sharedRaw = (await readSharedConfig()) ?? {}
   const partialHost = partial.hosts?.opencode
   const nextApiKey =
     typeof partial.apiKey === "string"
@@ -271,19 +256,12 @@ const saveSettings = async (partial: Partial<GlobalSettings>) => {
         : "user"
   const currentHosts = isRecord(sharedRaw.hosts) ? { ...sharedRaw.hosts } : {}
   const currentOpenCodeHost = isRecord(currentHosts.opencode) ? currentHosts.opencode : {}
-  // New install (no prior shared config) ships removeUserPrefix=true; an existing
-  // config keeps whatever it had, defaulting to false so upgraders aren't moved
-  // off their `user-<peerName>` peer.
-  const existingRemoveUserPrefix = current.hosts?.opencode?.removeUserPrefix
   currentHosts.opencode = {
     ...currentOpenCodeHost,
     workspace: partialHost?.workspace ?? current.hosts?.opencode?.workspace ?? "opencode",
     aiPeer: partialHost?.aiPeer ?? current.hosts?.opencode?.aiPeer ?? "opencode",
     recallMode: partialHost?.recallMode ?? current.hosts?.opencode?.recallMode ?? "hybrid",
     sessionStrategy: partialHost?.sessionStrategy ?? current.hosts?.opencode?.sessionStrategy ?? "per-directory",
-    removeUserPrefix:
-      partialHost?.removeUserPrefix ??
-      (typeof existingRemoveUserPrefix === "boolean" ? existingRemoveUserPrefix : !existingSharedConfig),
   }
 
   const next: GlobalSettings & Record<string, unknown> = {
@@ -428,7 +406,7 @@ const openModeValueDialog = async (
   const persistValue = async (rawValue: string) => {
     try {
       const nextConfig = structuredClone(config)
-      const nextValue = parseSharedConfigValue(fieldPath, currentValue, rawValue)
+      const nextValue = parseSharedConfigValue(currentValue, rawValue)
       setNestedValue(nextConfig, fieldPath, nextValue)
       const configPath = await writeSharedConfig(nextConfig)
       api.ui.dialog.replace(() =>
@@ -617,7 +595,6 @@ export const __testing = {
   modeEditableFieldPaths,
   readSharedConfig,
   resolveSharedConfigField,
-  parseSharedConfigValue,
   saveSettings,
   settingsMessage,
   sharedConfigPath,
