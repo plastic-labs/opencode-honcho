@@ -219,7 +219,10 @@ export const honchoSessionKey = (
 
 export const deriveUserPeerId = (peerName: string, removeUserPrefix: boolean) => {
   const name = peerName.trim() || "user"
-  return removeUserPrefix ? normalizeId(name) : normalizeId(`user:${name}`)
+  // The sibling claude-honcho / hermes-honcho plugins use the peer name
+  // verbatim (no case folding), so removeUserPrefix=true must skip normalizeId
+  // to achieve real parity instead of silently lowercasing into a different peer.
+  return removeUserPrefix ? name : normalizeId(`user:${name}`)
 }
 
 export const resolveSessionPeerIds = (peerName: string, aiPeer: string, removeUserPrefix: boolean) => {
