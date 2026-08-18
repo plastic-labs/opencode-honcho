@@ -3,7 +3,7 @@ import os from "node:os"
 import path from "node:path"
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises"
 
-import { createHonchoRuntimePlugin } from "../dist/index.js"
+import { createHonchoRuntimePlugin } from "../dist/v1/index.js"
 
 const withEnv = async (entries, action) => {
   const previous = new Map()
@@ -104,7 +104,7 @@ test("honcho_setup writes shared Honcho config with root peerName and hosts.open
   const sharedConfigPath = path.join(sharedConfigDir, "config.json")
 
   await withMockFetch(successfulValidationFetch, async () => {
-    await withEnv({ HOME: homeDir, USER: "ignored-user", XDG_CONFIG_HOME: undefined }, async () => {
+    await withEnv({ HOME: homeDir, USER: "ignored-user", XDG_CONFIG_HOME: undefined, HONCHO_API_KEY: undefined, HONCHO_URL: undefined, HONCHO_BASE_URL: undefined, HONCHO_WORKSPACE: undefined, HONCHO_WORKSPACE_ID: undefined }, async () => {
       const hooks = await createPluginHarness(rootDir)
       const honchoSetup = hooks.tool.honcho_setup
       const result = JSON.parse(await honchoSetup.execute({ apiKey: "new-key", peerName: "custom-peer" }, toolContext(rootDir)))
@@ -393,7 +393,7 @@ test("honcho_status preserves existing shared global config without mutating the
     JSON.stringify(initialConfig, null, 2),
   )
 
-  await withEnv({ HOME: homeDir, USER: "ignored-user", XDG_CONFIG_HOME: undefined }, async () => {
+  await withEnv({ HOME: homeDir, USER: "ignored-user", XDG_CONFIG_HOME: undefined, HONCHO_API_KEY: undefined, HONCHO_URL: undefined, HONCHO_BASE_URL: undefined, HONCHO_WORKSPACE: undefined, HONCHO_WORKSPACE_ID: undefined }, async () => {
     const hooks = await createPluginHarness(rootDir)
     const status = JSON.parse(await hooks.tool.honcho_status.execute({}, toolContext(rootDir)))
     const persisted = JSON.parse(await readFile(sharedConfigPath, "utf-8"))
@@ -464,7 +464,7 @@ test("honcho_setup returns a structured error when the shared config path cannot
   await writeFile(invalidHonchoDir, "not a directory\n")
 
   await withMockFetch(successfulValidationFetch, async () => {
-    await withEnv({ HOME: homeDir, USER: "ignored-user", XDG_CONFIG_HOME: undefined }, async () => {
+    await withEnv({ HOME: homeDir, USER: "ignored-user", XDG_CONFIG_HOME: undefined, HONCHO_API_KEY: undefined, HONCHO_URL: undefined, HONCHO_BASE_URL: undefined, HONCHO_WORKSPACE: undefined, HONCHO_WORKSPACE_ID: undefined }, async () => {
       const hooks = await createPluginHarness(rootDir)
       const honchoSetup = hooks.tool.honcho_setup
       const result = JSON.parse(await honchoSetup.execute({ apiKey: "new-key" }, toolContext(rootDir)))
@@ -480,7 +480,7 @@ test("honcho_set_config rejects removed and deprecated config fields", async () 
   const rootDir = await mkdtemp(path.join(os.tmpdir(), "honcho-reject-deprecated-field-"))
   const homeDir = await mkdtemp(path.join(os.tmpdir(), "honcho-home-reject-deprecated-"))
 
-  await withEnv({ HOME: homeDir, USER: "ignored-user", XDG_CONFIG_HOME: undefined }, async () => {
+  await withEnv({ HOME: homeDir, USER: "ignored-user", XDG_CONFIG_HOME: undefined, HONCHO_API_KEY: undefined, HONCHO_URL: undefined, HONCHO_BASE_URL: undefined, HONCHO_WORKSPACE: undefined, HONCHO_WORKSPACE_ID: undefined }, async () => {
     const hooks = await createPluginHarness(rootDir)
 
     for (const field of [
@@ -525,7 +525,7 @@ test("honcho_set_config updates requested field without deleting unrelated top-l
     ),
   )
 
-  await withEnv({ HOME: homeDir, USER: "ignored-user", XDG_CONFIG_HOME: undefined }, async () => {
+  await withEnv({ HOME: homeDir, USER: "ignored-user", XDG_CONFIG_HOME: undefined, HONCHO_API_KEY: undefined, HONCHO_URL: undefined, HONCHO_BASE_URL: undefined, HONCHO_WORKSPACE: undefined, HONCHO_WORKSPACE_ID: undefined }, async () => {
     const hooks = await createPluginHarness(rootDir)
     const result = JSON.parse(
       await hooks.tool.honcho_set_config.execute(
@@ -553,7 +553,7 @@ test("honcho_setup returns ok false and does not persist when cloud auth validat
         headers: { "content-type": "application/json" },
       }),
     async () => {
-      await withEnv({ HOME: homeDir, USER: "ignored-user", XDG_CONFIG_HOME: undefined }, async () => {
+      await withEnv({ HOME: homeDir, USER: "ignored-user", XDG_CONFIG_HOME: undefined, HONCHO_API_KEY: undefined, HONCHO_URL: undefined, HONCHO_BASE_URL: undefined, HONCHO_WORKSPACE: undefined, HONCHO_WORKSPACE_ID: undefined }, async () => {
         const hooks = await createPluginHarness(rootDir)
         const result = JSON.parse(await hooks.tool.honcho_setup.execute({ apiKey: "bad-key" }, toolContext(rootDir)))
         const persisted = JSON.parse(await readFile(sharedConfigPath, "utf-8"))
@@ -629,7 +629,7 @@ test("honcho_status defaults workspace to opencode instead of the OpenCode proje
   const rootDir = await mkdtemp(path.join(os.tmpdir(), "honcho-status-default-workspace-"))
   const homeDir = await mkdtemp(path.join(os.tmpdir(), "honcho-home-default-workspace-"))
 
-  await withEnv({ HOME: homeDir, USER: "ignored-user", XDG_CONFIG_HOME: undefined }, async () => {
+  await withEnv({ HOME: homeDir, USER: "ignored-user", XDG_CONFIG_HOME: undefined, HONCHO_API_KEY: undefined, HONCHO_URL: undefined, HONCHO_BASE_URL: undefined, HONCHO_WORKSPACE: undefined, HONCHO_WORKSPACE_ID: undefined }, async () => {
     const plugin = createHonchoRuntimePlugin()
     const hooks = await plugin({
       client: { app: { log: async () => undefined } },
@@ -653,7 +653,7 @@ test("honcho_status uses the project worktree to derive per-directory session ke
 
   await mkdir(nestedDir, { recursive: true })
 
-  await withEnv({ HOME: homeDir, USER: "ignored-user", XDG_CONFIG_HOME: undefined }, async () => {
+  await withEnv({ HOME: homeDir, USER: "ignored-user", XDG_CONFIG_HOME: undefined, HONCHO_API_KEY: undefined, HONCHO_URL: undefined, HONCHO_BASE_URL: undefined, HONCHO_WORKSPACE: undefined, HONCHO_WORKSPACE_ID: undefined }, async () => {
     const plugin = createHonchoRuntimePlugin()
     const hooks = await plugin({
       client: { app: { log: async () => undefined } },
@@ -706,7 +706,7 @@ test("upgrading install (existing config) keeps removeUserPrefix=false and the u
   }
   await writeFile(sharedConfigPath, JSON.stringify(initialConfig, null, 2))
 
-  await withEnv({ HOME: homeDir, USER: "ignored-user", XDG_CONFIG_HOME: undefined }, async () => {
+  await withEnv({ HOME: homeDir, USER: "ignored-user", XDG_CONFIG_HOME: undefined, HONCHO_API_KEY: undefined, HONCHO_URL: undefined, HONCHO_BASE_URL: undefined, HONCHO_WORKSPACE: undefined, HONCHO_WORKSPACE_ID: undefined }, async () => {
     const hooks = await createPluginHarness(rootDir)
     const result = JSON.parse(await hooks.tool.honcho_status.execute({}, toolContext(rootDir)))
     const persisted = JSON.parse(await readFile(sharedConfigPath, "utf-8"))
@@ -723,7 +723,7 @@ test("a string removeUserPrefix is coerced at read time (a stray \"false\" stays
   await mkdir(path.join(homeDir, ".honcho"), { recursive: true })
   const cfg = path.join(homeDir, ".honcho", "config.json")
 
-  await withEnv({ HOME: homeDir, USER: "ignored-user", XDG_CONFIG_HOME: undefined }, async () => {
+  await withEnv({ HOME: homeDir, USER: "ignored-user", XDG_CONFIG_HOME: undefined, HONCHO_API_KEY: undefined, HONCHO_URL: undefined, HONCHO_BASE_URL: undefined, HONCHO_WORKSPACE: undefined, HONCHO_WORKSPACE_ID: undefined }, async () => {
     await writeFile(cfg, JSON.stringify({ peerName: "alice", hosts: { opencode: { removeUserPrefix: "false" } } }))
     const result = JSON.parse(await (await createPluginHarness(rootDir)).tool.honcho_status.execute({}, toolContext(rootDir)))
     expect(result.peers.userPeer.id).toBe("user-alice")
@@ -736,7 +736,7 @@ test("bare peer colliding with the agent peer falls back to the prefix instead o
   await mkdir(path.join(homeDir, ".honcho"), { recursive: true })
   const cfg = path.join(homeDir, ".honcho", "config.json")
 
-  await withEnv({ HOME: homeDir, USER: "ignored-user", XDG_CONFIG_HOME: undefined }, async () => {
+  await withEnv({ HOME: homeDir, USER: "ignored-user", XDG_CONFIG_HOME: undefined, HONCHO_API_KEY: undefined, HONCHO_URL: undefined, HONCHO_BASE_URL: undefined, HONCHO_WORKSPACE: undefined, HONCHO_WORKSPACE_ID: undefined }, async () => {
     await writeFile(cfg, JSON.stringify({ peerName: "opencode", hosts: { opencode: { aiPeer: "opencode", removeUserPrefix: true } } }))
     const result = JSON.parse(await (await createPluginHarness(rootDir)).tool.honcho_status.execute({}, toolContext(rootDir)))
     expect(result.ok).toBe(true)

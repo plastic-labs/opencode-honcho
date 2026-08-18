@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 
-import { __testing } from "../dist/index.js"
+import { __testing } from "../dist/v1/index.js"
 
 test("root sessions keep user and root agent as peers", () => {
   const topology = __testing.buildPeerTopology({

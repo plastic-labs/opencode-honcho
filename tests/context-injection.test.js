@@ -3,7 +3,7 @@ import os from "node:os"
 import path from "node:path"
 import { mkdtemp } from "node:fs/promises"
 
-import { createHonchoRuntimePlugin } from "../dist/index.js"
+import { createHonchoRuntimePlugin } from "../dist/v1/index.js"
 
 const withEnv = async (entries, action) => {
   const previous = new Map()

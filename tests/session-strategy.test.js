@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, writeFile } from "node:fs/promises"
 import path from "node:path"
 import os from "node:os"
 
-import { __testing } from "../dist/index.js"
+import { __testing } from "../dist/v1/index.js"
 
 test("default session strategy matches Claude Code's per-directory behavior", () => {
   expect(__testing.defaultSettings.sessionStrategy).toBe("per-directory")

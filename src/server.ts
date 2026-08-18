@@ -1,10 +1,2 @@
-import { createHonchoRuntimePlugin } from "./index.js"
-
-export const server = createHonchoRuntimePlugin()
-
-const plugin = {
-  id: "@honcho-ai/opencode-honcho",
-  server,
-}
-
-export default plugin
+export { default } from "./v1/server.js"
+export * from "./v1/server.js"

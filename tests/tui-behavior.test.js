@@ -113,9 +113,27 @@ test("honcho config only exposes top-level and hosts.opencode fields", () => {
     "hosts.opencode.aiPeer",
     "hosts.opencode.recallMode",
     "hosts.opencode.sessionStrategy",
+    "hosts.opencode.removeUserPrefix",
   ])
   assert.equal(__testing.modeEditableFieldPaths().includes("hosts.claude_code.workspace"), false)
   assert.equal(__testing.modeEditableFieldPaths().includes("hosts.other.aiPeer"), false)
+})
+
+test("shared config preset options expose enum and boolean values", () => {
+  assert.deepEqual(__testing.sharedConfigPresetOptions("recallMode", "hybrid"), [
+    "hybrid",
+    "context",
+    "tools",
+  ])
+  assert.deepEqual(__testing.sharedConfigPresetOptions("sessionStrategy", "per-directory"), [
+    "per-repo",
+    "per-directory",
+    "per-session",
+    "global",
+    "git-branch",
+    "chat-instance",
+  ])
+  assert.deepEqual(__testing.sharedConfigPresetOptions("removeUserPrefix", true), ["true", "false"])
 })
 
 test("shared config field resolution is case-insensitive and preserves canonical paths", () => {
@@ -132,15 +150,7 @@ test("shared config field resolution is case-insensitive and preserves canonical
   assert.equal(field, "nested.SaveMessages")
 })
 
-test("shared config preset options expose enum and boolean values", () => {
-  assert.deepEqual(__testing.sharedConfigPresetOptions("recallMode", "hybrid"), [
-    "hybrid",
-    "context",
-    "tools",
-  ])
-  assert.deepEqual(__testing.sharedConfigPresetOptions("observationMode", "directional"), ["directional"])
-  assert.deepEqual(__testing.sharedConfigPresetOptions("saveMessages", true), ["true", "false"])
-})
+
 
 test("readSharedConfig rejects non-object top-level JSON", async () => {
   const homeDir = await mkdtemp(path.join(os.tmpdir(), "honcho-invalid-shared-config-"))
