@@ -11,8 +11,12 @@ const setup = async (_ctx: unknown) => {
 
 // The v2 TUI loader schema-checks the default export and only accepts { id, setup }.
 // We keep the v1 `tui` function and test helpers reachable via property access while
-// hiding them from all introspection (ownKeys, descriptors, `in`) so the v2 schema
-// sees a clean TUI plugin shape.
+// hiding them from descriptors and the `in` operator so the v2 schema sees a clean
+// TUI plugin shape.
+//
+// IMPORTANT: copying or normalizing the default export (object spread, Object.assign,
+// structuredClone, JSON.stringify, etc.) drops the hidden properties. Code that needs
+// the v1 `tui` function must import the named `tui` export, not copy it from default.
 const v2Definition = { id: PACKAGE_ID, setup }
 const v1Tui = (v1Plugin as any).tui
 const hidden = {
@@ -32,9 +36,6 @@ const defaultExport = new Proxy(v2Definition, {
       return false
     }
     return Reflect.has(target, prop)
-  },
-  ownKeys(target) {
-    return Reflect.ownKeys(target)
   },
   getOwnPropertyDescriptor(target, prop) {
     if (prop === "tui" || prop === "__testing") {

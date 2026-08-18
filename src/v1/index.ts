@@ -1,8 +1,13 @@
+
 import { existsSync } from "node:fs"
-import { mkdir, readFile, writeFile } from "node:fs/promises"
+import { readFile } from "node:fs/promises"
+import { homedir } from "node:os"
 import path from "node:path"
 import { tool, type Plugin, type PluginInput } from "@opencode-ai/plugin/v1"
 import { Honcho } from "@honcho-ai/sdk"
+import type { PeerAddition, SessionPeerConfig } from "@honcho-ai/sdk"
+import { atomicWriteJson } from "./atomic-write.js"
+
 
 type RecallMode = "hybrid" | "context" | "tools"
 type SessionStrategy = "per-repo" | "per-directory" | "per-session" | "global" | "git-branch" | "chat-instance"
@@ -121,6 +126,19 @@ const INTERNAL_DIALECTIC_REASONING_LEVEL: DialecticReasoningLevel = "low"
 const INTERNAL_DIALECTIC_MAX_CHARS = 600
 const INTERNAL_MESSAGE_MAX_CHARS = 25_000
 const INTERNAL_SAVE_MESSAGES = true
+const INTERNAL_HONCHO_TIMEOUT_MS = 5_000
+
+const withDeadline = <T>(work: Promise<T>, ms = INTERNAL_HONCHO_TIMEOUT_MS): Promise<T> =>
+  Promise.race([
+    work,
+    new Promise<never>((_, reject) => {
+      const timer = setTimeout(() => reject(new Error(`Honcho request exceeded ${ms}ms`)), ms)
+      if (typeof (timer as any).unref === "function") {
+        ;(timer as any).unref()
+      }
+    }),
+  ])
+
 const INTERNAL_CONTEXT_REFRESH: ContextRefreshSettings = {
   messageThreshold: 30,
   ttlSeconds: 300,
@@ -577,7 +595,7 @@ const deriveProjectRoot = (pluginInput: PluginInput) => {
 const sharedConfigPath = (configPathOverride?: string) =>
   configPathOverride ? path.resolve(configPathOverride) : sharedGlobalSettingsPath()
 
-const userHomeDir = () => process.env.HOME || process.env.USERPROFILE || process.cwd()
+const userHomeDir = () => process.env.HOME || process.env.USERPROFILE || homedir()
 
 const sharedGlobalSettingsPath = () => {
   return path.join(userHomeDir(), SHARED_SETTINGS_DIR_NAME, SHARED_SETTINGS_FILE_NAME)
@@ -618,8 +636,7 @@ const writeSettings = async (
   configPath: string,
   settings: Record<string, unknown>,
 ) => {
-  await mkdir(path.dirname(configPath), { recursive: true })
-  await writeFile(configPath, `${JSON.stringify(settings, null, 2)}\n`, "utf-8")
+  await atomicWriteJson(configPath, settings)
 }
 
 const currentUserName = () => "user"
@@ -665,8 +682,7 @@ const writeSharedGlobalSettings = async (configPath: string, settings: Record<st
   } else {
     delete next[LEGACY_API_KEY_FIELD]
   }
-  await mkdir(path.dirname(configPath), { recursive: true })
-  await writeFile(configPath, `${JSON.stringify(next, null, 2)}\n`, "utf-8")
+  await atomicWriteJson(configPath, next)
 }
 
 const ensureSharedGlobalSettings = async (configPath = sharedGlobalSettingsPath()) => {
@@ -858,8 +874,8 @@ const buildPeerTopology = (handle: Pick<
   }
 }
 
-const sessionPeerAdditions = (topology: PeerTopology) =>
-  Object.entries(topology.sessionPeerConfigs).map(([peerId, config]) => [peerId, config] as const)
+const sessionPeerAdditions = (topology: PeerTopology): PeerAddition =>
+  Object.entries(topology.sessionPeerConfigs).map(([peerId, config]) => [peerId, config] as [string, SessionPeerConfig])
 
 const createActiveRuntime = async (
   pluginInput: PluginInput,
@@ -879,7 +895,7 @@ const createActiveRuntime = async (
     configuration: { observeMe: true },
   })
   const session = await honcho.session(handle.sessionKey)
-  await session.addPeers(sessionPeerAdditions(buildPeerTopology(handle)) as never)
+  await session.addPeers(sessionPeerAdditions(buildPeerTopology(handle)))
   return { ...handle, honcho, session, userPeer, agentPeer }
 }
 
@@ -1153,32 +1169,40 @@ export const createHonchoRuntimePlugin =
       const dialecticEnabled = INTERNAL_CONTEXT_REFRESH.useSessionStartDialectic
       const [userContextResult, agentContextResult, summariesResult, userChatResult, agentChatResult] =
         await Promise.allSettled([
-          runtime.userPeer.context({
-            maxConclusions: 12,
-            includeMostFrequent: true,
-          }),
-          runtime.agentPeer.context({
-            maxConclusions: 8,
-            includeMostFrequent: true,
-          }),
-          runtime.session.summaries(),
+          withDeadline(
+            runtime.userPeer.context({
+              maxConclusions: 12,
+              includeMostFrequent: true,
+            }),
+          ),
+          withDeadline(
+            runtime.agentPeer.context({
+              maxConclusions: 8,
+              includeMostFrequent: true,
+            }),
+          ),
+          withDeadline(runtime.session.summaries()),
           dialecticEnabled
-            ? runtime.agentPeer.chat(
-                `Summarize what you know about ${runtime.userPeerId} in 2-3 sentences. Focus on durable preferences, current projects, and working style.`,
-                {
-                  target: runtime.userPeer,
-                  session: runtime.session,
-                  reasoningLevel: INTERNAL_DIALECTIC_REASONING_LEVEL,
-                },
+            ? withDeadline(
+                runtime.agentPeer.chat(
+                  `Summarize what you know about ${runtime.userPeerId} in 2-3 sentences. Focus on durable preferences, current projects, and working style.`,
+                  {
+                    target: runtime.userPeer,
+                    session: runtime.session,
+                    reasoningLevel: INTERNAL_DIALECTIC_REASONING_LEVEL,
+                  },
+                ),
               )
             : Promise.resolve(null),
           dialecticEnabled
-            ? runtime.agentPeer.chat(
-                "Summarize the assistant's recent work context for this project in 2-3 sentences.",
-                {
-                  session: runtime.session,
-                  reasoningLevel: INTERNAL_DIALECTIC_REASONING_LEVEL,
-                },
+            ? withDeadline(
+                runtime.agentPeer.chat(
+                  "Summarize the assistant's recent work context for this project in 2-3 sentences.",
+                  {
+                    session: runtime.session,
+                    reasoningLevel: INTERNAL_DIALECTIC_REASONING_LEVEL,
+                  },
+                ),
               )
             : Promise.resolve(null),
         ])
@@ -1234,18 +1258,20 @@ export const createHonchoRuntimePlugin =
       if (!shouldRefreshPromptContext(state, topicKey, INTERNAL_CONTEXT_REFRESH)) {
         return state.cachedPromptContext
       }
-      const sessionContext = await runtime.session.context({
-        summary: true,
-        peerPerspective: runtime.agentPeer,
-        peerTarget: runtime.userPeer,
-        limitToSession: runtime.config.sessionStrategy === "per-session",
-        representationOptions: {
-          searchQuery: topicKey || undefined,
-          searchTopK: 5,
-          searchMaxDistance: 0.7,
-          maxConclusions: 6,
-        },
-      })
+      const sessionContext = await withDeadline(
+        runtime.session.context({
+          summary: true,
+          peerPerspective: runtime.agentPeer,
+          peerTarget: runtime.userPeer,
+          limitToSession: runtime.config.sessionStrategy === "per-session",
+          representationOptions: {
+            searchQuery: topicKey || undefined,
+            searchTopK: 5,
+            searchMaxDistance: 0.7,
+            maxConclusions: 6,
+          },
+        }),
+      )
       const compiled = formatPromptContextBlock(
         parseSessionSummary(sessionContext.summary),
         parseRepresentation(sessionContext.peerRepresentation),
@@ -1278,19 +1304,20 @@ export const createHonchoRuntimePlugin =
         sessionId: runtime.sessionId,
         sessionKey: runtime.sessionKey,
         reason,
-        content,
+        fingerprint: normalized,
+        contentLength: content.length,
       })
       return true
     }
 
     return {
       event: async ({ event }) => {
-        const payload = isRecord(event) ? { event, ...(isRecord(event.properties) ? event.properties : {}) } : { event }
-        const handle = await deriveRuntimeHandle(pluginInput, payload, configPath)
-        const stateKey = deriveSessionStateKey(handle)
         if (event.type === "command.executed") {
           return
         }
+        const payload = isRecord(event) ? { event, ...(isRecord(event.properties) ? event.properties : {}) } : { event }
+        const handle = await deriveRuntimeHandle(pluginInput, payload, configPath)
+        const stateKey = deriveSessionStateKey(handle)
         if (event.type === "session.deleted" || event.type === "session.error") {
           sessionStates.delete(stateKey)
           return
@@ -1324,13 +1351,6 @@ export const createHonchoRuntimePlugin =
           }, undefined)
           return
         }
-      },
-      "command.execute.before": async (input, output) => {
-        const command = typeof input.command === "string" ? input.command : ""
-        if (!command.startsWith("honcho:") && !command.startsWith("honcho-")) {
-          return
-        }
-        output.parts = output.parts || []
       },
       "shell.env": async (input, output) => {
         const handle = await deriveRuntimeHandle(pluginInput, input, configPath)
@@ -1403,9 +1423,6 @@ export const createHonchoRuntimePlugin =
           )
         }, undefined)
       },
-      "experimental.chat.messages.transform": async (_input, output) => {
-        void output
-      },
       "experimental.session.compacting": async (input, output) => {
         const handle = await deriveRuntimeHandle(pluginInput, input, configPath)
         const state = getState(deriveSessionStateKey(handle))
@@ -1430,12 +1447,6 @@ export const createHonchoRuntimePlugin =
               : "Recent durable conclusions: none",
           ].join("\n"),
         )
-      },
-      "tool.execute.before": async (_input, output) => {
-        output.args = output.args
-      },
-      "tool.execute.after": async () => {
-        return
       },
       tool: {
         honcho_get_config: tool({

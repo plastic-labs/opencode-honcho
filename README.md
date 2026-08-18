@@ -136,8 +136,6 @@ The plugin uses these OpenCode plugin capabilities:
 
 - `event`
 - `chat.message`
-- `tool.execute.after`
-- `command.execute.before`
 - `experimental.chat.system.transform`
 - `experimental.session.compacting`
 - `shell.env`
@@ -147,7 +145,7 @@ The plugin uses these OpenCode plugin capabilities:
 
 The same package is also compatible with the OpenCode v2 plugin API. When loaded by OpenCode v2, the package's main entry registers the same Honcho tools, injects memory into system prompts, adds Honcho environment variables to shell sessions, and registers `/honcho:*` slash commands via the v2 command transform.
 
-OpenCode v1 continues to use the `./server` and `./tui` entries, which still expose v1 plugin modules.
+OpenCode v1 continues to use the `./server` and `./tui` entries, which still expose v1 plugin modules. The v1 runtime is also importable directly from `@honcho-ai/opencode-honcho/v1`.
 
 ## Development
 

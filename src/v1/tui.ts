@@ -1,7 +1,8 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises"
+import { readFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import path from "node:path"
 import type { TuiPlugin, TuiPluginModule } from "@opencode-ai/plugin/v1/tui"
+import { atomicWriteJson } from "./atomic-write.js"
 
 const PACKAGE_ID = "@honcho-ai/opencode-honcho"
 const DEFAULT_BASE_URL = "https://api.honcho.dev"
@@ -10,10 +11,7 @@ const SHARED_SETTINGS_FILE_NAME = "config.json"
 
 const SHARED_CONFIG_PRESETS: Record<string, readonly string[]> = {
   recallmode: ["hybrid", "context", "tools"],
-  observationmode: ["directional"],
-  peermodel: ["classic", "hierarchical"],
   sessionstrategy: ["per-repo", "per-directory", "per-session", "global", "git-branch", "chat-instance"],
-  dialecticreasoninglevel: ["minimal", "low", "medium", "high", "max"],
 }
 
 const MODE_EDITABLE_FIELD_PATHS = [
@@ -24,6 +22,7 @@ const MODE_EDITABLE_FIELD_PATHS = [
   "hosts.opencode.aiPeer",
   "hosts.opencode.recallMode",
   "hosts.opencode.sessionStrategy",
+  "hosts.opencode.removeUserPrefix",
 ] as const
 
 type GlobalSettings = {
@@ -36,15 +35,15 @@ type GlobalSettings = {
       aiPeer?: string
       recallMode?: "hybrid" | "context" | "tools"
       sessionStrategy?: "per-repo" | "per-directory" | "per-session" | "global" | "git-branch" | "chat-instance"
+      removeUserPrefix?: boolean
     }
   }
 }
 
-const globalSettingsPath = () =>
-  path.join(process.env.HOME || process.env.USERPROFILE || homedir(), SHARED_SETTINGS_DIR_NAME, SHARED_SETTINGS_FILE_NAME)
-
 const sharedConfigPath = () =>
   path.join(process.env.HOME || process.env.USERPROFILE || homedir(), SHARED_SETTINGS_DIR_NAME, SHARED_SETTINGS_FILE_NAME)
+
+const globalSettingsPath = sharedConfigPath
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value)
@@ -92,8 +91,7 @@ const readSharedConfig = async (): Promise<Record<string, unknown> | null> => {
 
 const writeSharedConfig = async (settings: Record<string, unknown>) => {
   const configPath = sharedConfigPath()
-  await mkdir(path.dirname(configPath), { recursive: true })
-  await writeFile(configPath, `${JSON.stringify(settings, null, 2)}\n`, "utf-8")
+  await atomicWriteJson(configPath, settings)
   return configPath
 }
 
@@ -165,8 +163,7 @@ const parseSharedConfigValue = (currentValue: unknown, rawValue: string) => {
 
 const writeGlobalSettings = async (settings: GlobalSettings) => {
   const configPath = globalSettingsPath()
-  await mkdir(path.dirname(configPath), { recursive: true })
-  await writeFile(configPath, `${JSON.stringify(settings, null, 2)}\n`, "utf-8")
+  await atomicWriteJson(configPath, settings)
   return configPath
 }
 
@@ -235,6 +232,7 @@ const settingsMessage = (settings: GlobalSettings) => {
     `AI peer: ${host.aiPeer || "opencode"}`,
     `Recall mode: ${host.recallMode || "hybrid"}`,
     `Session strategy: ${host.sessionStrategy || "per-directory"}`,
+    `Remove user prefix: ${host.removeUserPrefix === true ? "true" : "false"}`,
   ].join("\n")
 }
 
@@ -315,18 +313,27 @@ const openSetupConfirmation = async (
       placeholder: "Your Honcho peer name",
       value: typeof partial.peerName === "string" ? partial.peerName : "",
       onConfirm: async (peerName) => {
-        const configPath = await saveSettings({
-          ...partial,
-          peerName: peerName.trim(),
-        })
-        api.ui.dialog.replace(() =>
-          api.ui.DialogAlert({
-            title: "Honcho configured",
-            message: [`Saved settings to ${configPath}`, ...summaryLines, `Peer name: ${peerName.trim() || "user"}`].join(
-              "\n",
-            ),
-          }),
-        )
+        try {
+          const configPath = await saveSettings({
+            ...partial,
+            peerName: peerName.trim(),
+          })
+          api.ui.dialog.replace(() =>
+            api.ui.DialogAlert({
+              title: "Honcho configured",
+              message: [`Saved settings to ${configPath}`, ...summaryLines, `Peer name: ${peerName.trim() || "user"}`].join(
+                "\n",
+              ),
+            }),
+          )
+        } catch (error) {
+          api.ui.dialog.replace(() =>
+            api.ui.DialogAlert({
+              title: "Honcho setup failed",
+              message: error instanceof Error ? error.message : String(error),
+            }),
+          )
+        }
       },
       onCancel: () => api.ui.dialog.clear(),
     }),

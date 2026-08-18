@@ -1,6 +1,5 @@
 import { Plugin } from "@opencode-ai/plugin"
 import { z } from "zod"
-import { zodToJsonSchema } from "zod-to-json-schema"
 import {
   createHonchoRuntimePlugin,
   type RuntimePluginOptions,
@@ -123,17 +122,20 @@ export default Plugin.define({
 
     const v1InstancesByDirectory = new Map<
       string,
-      Awaited<ReturnType<ReturnType<typeof createHonchoRuntimePlugin>>>
+      Promise<Awaited<ReturnType<ReturnType<typeof createHonchoRuntimePlugin>>>>
     >()
 
     const getV1Instance = async (directory: string) => {
-      let instance = v1InstancesByDirectory.get(directory)
-      if (!instance) {
+      let pending = v1InstancesByDirectory.get(directory)
+      if (!pending) {
         const makeHooks = createHonchoRuntimePlugin(options)
-        instance = await makeHooks(createV1PluginInput(ctx, directory) as any)
-        v1InstancesByDirectory.set(directory, instance)
+        pending = makeHooks(createV1PluginInput(ctx, directory) as any).catch((error) => {
+          v1InstancesByDirectory.delete(directory)
+          throw error
+        })
+        v1InstancesByDirectory.set(directory, pending)
       }
-      return instance
+      return pending
     }
 
     // Prime a dummy instance to read the tool definitions synchronously inside
@@ -148,7 +150,7 @@ export default Plugin.define({
       for (const [name, definition] of Object.entries(v1ToolDefinitions)) {
         if (!definition) continue
         const argsSchema = z.object(definition.args as any)
-        const inputSchema = zodToJsonSchema(argsSchema as any)
+        const inputSchema = z.toJSONSchema(argsSchema)
 
         tools.add({
           name,
@@ -216,20 +218,25 @@ export default Plugin.define({
     if (dummyInstance.event && (ctx as any).event?.subscribe) {
       const subscribe = (ctx as any).event.subscribe as (cb: (event: unknown) => void | Promise<void>) => Promise<{ dispose: () => Promise<void> }>
       await subscribe(async (event) => {
-        const v1Event = mapV2EventToV1(event)
-        const sessionID =
-          typeof (v1Event as any).sessionID === "string"
-            ? (v1Event as any).sessionID
-            : typeof (v1Event as any).data?.sessionID === "string"
-              ? (v1Event as any).data.sessionID
-              : undefined
-        const directory = sessionID
-          ? await getDirectoryFromSession(ctx, sessionID)
-          : dummyDirectory
-        if (!directory) return
-        const instance = await getV1Instance(directory)
-        if (!instance.event) return
-        await instance.event({ event: v1Event } as any)
+        try {
+          const v1Event = mapV2EventToV1(event)
+          const sessionID =
+            typeof (v1Event as any).sessionID === "string"
+              ? (v1Event as any).sessionID
+              : typeof (v1Event as any).data?.sessionID === "string"
+                ? (v1Event as any).data.sessionID
+                : undefined
+          const directory = sessionID
+            ? await getDirectoryFromSession(ctx, sessionID)
+            : dummyDirectory
+          if (!directory) return
+          const instance = await getV1Instance(directory)
+          if (!instance.event) return
+          await instance.event({ event: v1Event } as any)
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : String(error)
+          console.error(`[${PACKAGE_ID}] v2 event forwarding failed: ${detail}`)
+        }
       })
     }
 
@@ -259,6 +266,7 @@ export default Plugin.define({
     // Best-effort user-message capture: the v2 "context" hook gives us the
     // full message list before each model dispatch. We capture any user
     // message we have not seen yet through the v1 chat.message hook.
+    const MAX_CAPTURED_MESSAGE_IDS = 1000
     const capturedMessageIds = new Set<string>()
     await ctx.session.hook("context", async (event) => {
       if (!Array.isArray(event.messages)) return
@@ -269,14 +277,14 @@ export default Plugin.define({
 
       for (const message of event.messages) {
         if (!isRecord(message) || message.role !== "user") continue
-        const messageID =
-          typeof message.id === "string" ? message.id : `${event.sessionID}-${Date.now()}`
-        if (capturedMessageIds.has(messageID)) continue
-        capturedMessageIds.add(messageID)
 
         const content = message.content
         const text = Array.isArray(content) ? extractText(content) : typeof content === "string" ? content : ""
         if (!text) continue
+
+        const messageID =
+          typeof message.id === "string" ? message.id : `${event.sessionID}-${Bun.hash(text)}`
+        if (capturedMessageIds.has(messageID)) continue
 
         await instance["chat.message"](
           { sessionID: event.sessionID, messageID },
@@ -285,6 +293,14 @@ export default Plugin.define({
             parts: Array.isArray(content) ? content : [{ type: "text", text }],
           },
         )
+
+        if (capturedMessageIds.size >= MAX_CAPTURED_MESSAGE_IDS) {
+          const oldest = capturedMessageIds.values().next().value
+          if (typeof oldest === "string") {
+            capturedMessageIds.delete(oldest)
+          }
+        }
+        capturedMessageIds.add(messageID)
       }
     })
   },

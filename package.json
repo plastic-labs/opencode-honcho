@@ -43,8 +43,7 @@
   "dependencies": {
     "@honcho-ai/sdk": "^2.1.1",
     "@opencode-ai/plugin": "0.0.0-beta-17595",
-    "zod": "^4.1.8",
-    "zod-to-json-schema": "^3.23.8"
+    "zod": "^4.1.8"
   },
   "devDependencies": {
     "@types/bun": "^1.2.8",
