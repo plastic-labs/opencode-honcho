@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 
-import { __testing } from "../dist/index.js"
+import { __testing } from "../dist/v1/index.js"
 
 test("removeUserPrefix=false (the default) keeps the legacy user- prefix", () => {
   expect(__testing.deriveUserPeerId({ peerName: "rui", removeUserPrefix: false })).toBe("user-rui")

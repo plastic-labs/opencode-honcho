@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 
-import { __testing } from "../dist/index.js"
+import { __testing } from "../dist/v1/index.js"
 
 test("distinct user and agent peers are accepted", () => {
   expect(() => __testing.assertDistinctUserAndAgentPeers("rui", "opencode")).not.toThrow()

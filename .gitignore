@@ -3,5 +3,7 @@ dist/
 node_modules/
 *.tgz
 npm-debug.log*
+package-lock.json
+yarn.lock
 .opencode/
 vendor/

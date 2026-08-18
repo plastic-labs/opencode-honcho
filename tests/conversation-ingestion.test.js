@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 
-import { __testing } from "../dist/index.js"
+import { __testing } from "../dist/v1/index.js"
 
 test("extractCompletedAssistantMessage uses current-turn parts and completion timestamp", () => {
   const partState = new Map()

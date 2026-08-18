@@ -14,3 +14,7 @@ test("tui entry default export matches OpenCode plugin expectations", () => {
   expect(tuiModule.id).toBe("@honcho-ai/opencode-honcho")
   expect(typeof tuiModule.tui).toBe("function")
 })
+
+test("tui entry default export is also a valid v2 TUI plugin", () => {
+  expect(typeof tuiModule.setup).toBe("function")
+})

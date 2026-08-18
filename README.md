@@ -143,6 +143,12 @@ The plugin uses these OpenCode plugin capabilities:
 - `shell.env`
 - `tool`
 
+### OpenCode v2
+
+The same package is also compatible with the OpenCode v2 plugin API. When loaded by OpenCode v2, the package's main entry registers the same Honcho tools, injects memory into system prompts, adds Honcho environment variables to shell sessions, and registers `/honcho:*` slash commands via the v2 command transform.
+
+OpenCode v1 continues to use the `./server` and `./tui` entries, which still expose v1 plugin modules.
+
 ## Development
 
 For macOS/Linux local branch testing:

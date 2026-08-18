@@ -1,6 +1,6 @@
 {
   "name": "@honcho-ai/opencode-honcho",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "type": "module",
   "description": "Honcho memory integration for OpenCode",
   "license": "MIT",
@@ -11,6 +11,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./v1": {
+      "types": "./dist/v1/index.d.ts",
+      "import": "./dist/v1/index.js"
     },
     "./server": {
       "import": "./dist/server.js"
@@ -31,14 +35,16 @@
     "tsconfig.json"
   ],
   "scripts": {
-    "build": "bun --eval \"const { rm } = await import('node:fs/promises'); await rm('dist', { recursive: true, force: true })\" && bun build ./src/index.ts ./src/server.ts ./src/tui.ts ./src/capabilities.ts --outdir ./dist --target bun --external @opencode-ai/plugin && tsc --emitDeclarationOnly",
+    "build": "bun --eval \"const { rm } = await import('node:fs/promises'); await rm('dist', { recursive: true, force: true })\" && bun build ./src/index.ts ./src/v1/index.ts ./src/server.ts ./src/tui.ts ./src/capabilities.ts --outdir ./dist --target bun --external @opencode-ai/plugin && tsc --emitDeclarationOnly",
     "check": "tsc --noEmit",
     "test": "bun run build && bun test ./tests",
     "prepublishOnly": "bun run build"
   },
   "dependencies": {
-    "@opencode-ai/plugin": "^1.3.13",
-    "@honcho-ai/sdk": "^2.1.1"
+    "@honcho-ai/sdk": "^2.1.1",
+    "@opencode-ai/plugin": "0.0.0-beta-17595",
+    "zod": "^4.1.8",
+    "zod-to-json-schema": "^3.23.8"
   },
   "devDependencies": {
     "@types/bun": "^1.2.8",
