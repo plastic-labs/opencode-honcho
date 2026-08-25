@@ -76,7 +76,8 @@ OpenCode reads and writes this shared config file directly. OpenCode-specific de
       "aiPeer": "opencode",
       "recallMode": "hybrid",
       "sessionStrategy": "per-directory",
-      "removeUserPrefix": true // true uses the bare peerName; false (default on upgrade) keeps the legacy user-<peerName> peer
+      "removeUserPrefix": true, // true uses the bare peerName; false (default on upgrade) keeps the legacy user-<peerName> peer
+      "apiKey": "hch-..." // optional; overrides the root apiKey for this host
     }
   }
 }

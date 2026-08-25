@@ -30,7 +30,7 @@ type HonchoSettings = {
 }
 
 type HostScopedSettings = Partial<
-  Pick<HonchoSettings, "workspace" | "aiPeer" | "recallMode" | "sessionStrategy" | "removeUserPrefix">
+  Pick<HonchoSettings, "apiKey" | "workspace" | "aiPeer" | "recallMode" | "sessionStrategy" | "removeUserPrefix">
 >
 
 type RuntimeHandle = {
@@ -380,7 +380,6 @@ const hostScopedSettings = (value: unknown): HostScopedSettings | null => {
     return null
   }
   const normalized = normalizedRawSettings(value)
-  delete normalized[LEGACY_API_KEY_FIELD]
   delete normalized.peerName
   delete normalized.linkedHosts
   delete normalized.baseUrl
@@ -1485,8 +1484,8 @@ export const createHonchoRuntimePlugin =
               }
 
               if (shouldPersistGlobal) {
-                if (effectiveApiKey) {
-                  nextGlobal[LEGACY_API_KEY_FIELD] = effectiveApiKey
+                if (providedApiKey) {
+                  nextGlobal[LEGACY_API_KEY_FIELD] = providedApiKey
                   persistedFields.push(LEGACY_API_KEY_FIELD)
                 }
                 nextGlobal.peerName = effectivePeerName
@@ -1500,7 +1499,8 @@ export const createHonchoRuntimePlugin =
                     baseUrl: effectiveBaseUrl,
                   },
                 )
-                nextHosts.opencode = hostDefaults(nextResolved)
+                const existingOpenCodeHost = isRecord(nextHosts.opencode) ? { ...nextHosts.opencode } : {}
+                nextHosts.opencode = { ...existingOpenCodeHost, ...hostDefaults(nextResolved) }
                 nextGlobal.hosts = nextHosts
                 if (providedBaseUrl || providedApiKey) {
                   persistedFields.push("baseUrl")
