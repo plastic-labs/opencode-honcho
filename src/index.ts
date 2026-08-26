@@ -5,6 +5,7 @@ import { tool, type Plugin, type PluginInput } from "@opencode-ai/plugin"
 import { Honcho } from "@honcho-ai/sdk"
 
 type RecallMode = "hybrid" | "context" | "tools"
+type ObservationMode = "unified" | "directional"
 type SessionStrategy = "per-repo" | "per-directory" | "per-session" | "global" | "git-branch" | "chat-instance"
 type DialecticReasoningLevel = "minimal" | "low" | "medium" | "high" | "max"
 type ContextRefreshSettings = {
@@ -25,12 +26,13 @@ type HonchoSettings = {
   aiPeer: string
   workspace: string
   recallMode: RecallMode
+  observationMode: ObservationMode
   sessionStrategy: SessionStrategy
   removeUserPrefix: boolean
 }
 
 type HostScopedSettings = Partial<
-  Pick<HonchoSettings, "workspace" | "aiPeer" | "recallMode" | "sessionStrategy" | "removeUserPrefix">
+  Pick<HonchoSettings, "workspace" | "aiPeer" | "recallMode" | "observationMode" | "sessionStrategy" | "removeUserPrefix">
 >
 
 type RuntimeHandle = {
@@ -110,6 +112,9 @@ const DEFAULT_SETTINGS: HonchoSettings = {
   aiPeer: "opencode",
   workspace: "opencode",
   recallMode: "hybrid",
+  // Fallback for configs that predate this field: keep directional so existing
+  // installs do not silently switch collections. New installs stamp unified.
+  observationMode: "directional",
   sessionStrategy: "per-directory",
   // Default false for everyone, including upgrading installs: an existing user
   // keeps their `user-<peerName>` peer and its memory. New installs are stamped
@@ -132,6 +137,7 @@ const BOOLEAN_KEYS = new Set<keyof HonchoSettings>(["removeUserPrefix"])
 
 const ENUM_KEYS: Record<string, ReadonlySet<string>> = {
   recallMode: new Set(["hybrid", "context", "tools"]),
+  observationMode: new Set(["unified", "directional"]),
   sessionStrategy: new Set(["per-repo", "per-directory", "per-session", "global", "git-branch", "chat-instance"]),
 }
 
@@ -142,6 +148,7 @@ const HOST_SETTING_FIELDS = new Set<keyof HonchoSettings>([
   "workspace",
   "aiPeer",
   "recallMode",
+  "observationMode",
   "sessionStrategy",
   "removeUserPrefix",
 ])
@@ -153,6 +160,7 @@ const SETTING_FIELD_PATHS = new Set([
   "aiPeer",
   "workspace",
   "recallMode",
+  "observationMode",
   "sessionStrategy",
   "removeUserPrefix",
 ])
@@ -679,14 +687,18 @@ const ensureSharedGlobalSettings = async (configPath = sharedGlobalSettingsPath(
     next = currentShared
   } else {
     // Brand-new install (no prior config): ship removeUserPrefix=true so new
-    // users get the bare `<peerName>` peer. Existing configs take the `if` branch
-    // untouched and fall back to the false default, preserving their `user-<name>`
-    // peer.
+    // users get the bare `<peerName>` peer, and observationMode=unified so tools
+    // query the shared user self-collection. Existing configs take the `if`
+    // branch untouched and fall back to directional / prefixed peers.
     next = {
       peerName: currentUserName(),
       baseUrl: mergedHostSettings.baseUrl,
       hosts: {
-        opencode: { ...hostDefaults(mergedHostSettings), removeUserPrefix: true },
+        opencode: {
+          ...hostDefaults(mergedHostSettings),
+          removeUserPrefix: true,
+          observationMode: "unified",
+        },
       },
     }
     await writeSharedGlobalSettings(configPath, next)
@@ -829,6 +841,31 @@ const deriveRuntimeHandle = async (
 }
 
 const deriveSessionStateKey = (handle: Pick<RuntimeHandle, "sessionId" | "sessionKey">) => handle.sessionKey || handle.sessionId
+
+const isUnifiedObservation = (settings: Pick<HonchoSettings, "observationMode"> | Record<string, unknown> | undefined) =>
+  settings?.observationMode === "unified"
+
+const resolveUserMemoryQuery = (
+  settings: Pick<HonchoSettings, "observationMode"> | Record<string, unknown> | undefined,
+): { observer: "user" | "agent"; target: "user" | null; observationMode: ObservationMode } =>
+  isUnifiedObservation(settings)
+    ? { observer: "user", target: null, observationMode: "unified" }
+    : { observer: "agent", target: "user", observationMode: "directional" }
+
+const userMemoryObserverPeer = (runtime: ActiveRuntime) =>
+  isUnifiedObservation(runtime.config) ? runtime.userPeer : runtime.agentPeer
+
+const userMemoryChatOptions = (runtime: ActiveRuntime) =>
+  isUnifiedObservation(runtime.config)
+    ? {
+        session: runtime.session,
+        reasoningLevel: INTERNAL_DIALECTIC_REASONING_LEVEL,
+      }
+    : {
+        target: runtime.userPeer,
+        session: runtime.session,
+        reasoningLevel: INTERNAL_DIALECTIC_REASONING_LEVEL,
+      }
 
 const buildPeerTopology = (handle: Pick<
   RuntimeHandle,
@@ -1009,6 +1046,8 @@ type ChatToolResult =
       ok: true
       workspace: string
       sessionKey: string
+      observationMode: ObservationMode
+      observer: string
       response: string
     }
   | {
@@ -1097,6 +1136,7 @@ export const createHonchoRuntimePlugin =
         sessionKey: handle.sessionKey,
         sessionName: handle.sessionKey,
         recallMode: handle.config.recallMode,
+        observationMode: handle.config.observationMode,
         sessionStrategy: handle.config.sessionStrategy,
         peerName: handle.config.peerName,
         removeUserPrefix: handle.config.removeUserPrefix,
@@ -1270,7 +1310,7 @@ export const createHonchoRuntimePlugin =
       state.conclusionFingerprints.add(normalized)
       appendConclusion(state, content)
       state.lastPromptRefreshAt = null
-      await runtime.agentPeer.conclusionsOf(runtime.userPeer).create({
+      await userMemoryObserverPeer(runtime).conclusionsOf(runtime.userPeer).create({
         content,
         sessionId: runtime.session.id,
       })
@@ -1416,6 +1456,7 @@ export const createHonchoRuntimePlugin =
             `Workspace: ${handle.workspaceId}`,
             `Session key: ${handle.sessionKey}`,
             `Recall mode: ${handle.config.recallMode}`,
+            `Observation mode: ${handle.config.observationMode}`,
             `User peer: ${handle.userPeerId} (observe_me=true, observe_others=false)`,
             `Root agent peer: ${handle.rootAgentPeerId} (observe_me=true, observe_others=true)`,
             handle.childAgentPeerId
@@ -1500,7 +1541,11 @@ export const createHonchoRuntimePlugin =
                     baseUrl: effectiveBaseUrl,
                   },
                 )
-                nextHosts.opencode = hostDefaults(nextResolved)
+                const existingHost = isRecord(nextHosts.opencode) ? nextHosts.opencode : {}
+                nextHosts.opencode = {
+                  ...existingHost,
+                  ...hostDefaults(nextResolved),
+                }
                 nextGlobal.hosts = nextHosts
                 if (providedBaseUrl || providedApiKey) {
                   persistedFields.push("baseUrl")
@@ -1622,23 +1667,26 @@ export const createHonchoRuntimePlugin =
           },
         }),
         honcho_chat: tool({
-          description: "Ask Honcho for a reasoning-backed answer about this project using the current peer and session mapping.",
+          description:
+            "Ask Honcho for a reasoning-backed answer about this project using the current peer and session mapping. In unified observationMode this queries the user's self-collection (shared with other unified agents in the workspace); in directional it queries this AI peer's view of the user.",
           args: { query: tool.schema.string() },
           async execute(args, context) {
             return JSON.stringify(
               await withRuntime<ChatToolResult>(
                 { ...args, sessionID: context.sessionID },
-                async (runtime) => ({
-                  ok: true,
-                  workspace: runtime.workspaceId,
-                  sessionKey: runtime.sessionKey,
-                  response:
-                    (await runtime.agentPeer.chat(args.query, {
-                      target: runtime.userPeer,
-                      session: runtime.session,
-                      reasoningLevel: INTERNAL_DIALECTIC_REASONING_LEVEL,
-                    })) ?? "",
-                }),
+                async (runtime) => {
+                  const query = resolveUserMemoryQuery(runtime.config)
+                  const observer = userMemoryObserverPeer(runtime)
+                  return {
+                    ok: true,
+                    workspace: runtime.workspaceId,
+                    sessionKey: runtime.sessionKey,
+                    observationMode: query.observationMode,
+                    observer: query.observer === "user" ? runtime.userPeerId : runtime.activeAgentPeerId,
+                    response:
+                      (await observer.chat(args.query, userMemoryChatOptions(runtime))) ?? "",
+                  }
+                },
                 { ok: false, response: null, error: "Honcho is unavailable for chat." },
               ),
               null,
@@ -1673,6 +1721,8 @@ export const createHonchoRuntimePlugin =
                   ok: created,
                   workspace: runtime.workspaceId,
                   sessionKey: runtime.sessionKey,
+                  observationMode: runtime.config.observationMode,
+                  observer: isUnifiedObservation(runtime.config) ? runtime.userPeerId : runtime.activeAgentPeerId,
                   content,
                 },
                 null,
@@ -1719,5 +1769,6 @@ export const __testing = {
   extractSessionId,
   normalizeId,
   sessionPeerAdditions,
+  resolveUserMemoryQuery,
 }
 export default HonchoRuntimePlugin

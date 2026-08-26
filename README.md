@@ -46,7 +46,7 @@ If your shell cannot find `opencode`, restart your shell or source your shell co
 - **Session Mapping** - Sessions can be scoped per directory, repo, branch, chat instance, or globally
 - **Durable Writes** - Honcho can retain stable conclusions and session context
 - **Memory Retrieval** - Search memory, query Honcho knowledge, and inject relevant context into prompts
-- **Peer Modeling** - User and root-agent peers follow a fixed observation model tuned for OpenCode
+- **Peer Modeling** - User and root-agent observation flags are configurable (`observationMode`)
 
 ## Installation Output
 
@@ -75,6 +75,7 @@ OpenCode reads and writes this shared config file directly. OpenCode-specific de
       "workspace": "opencode",
       "aiPeer": "opencode",
       "recallMode": "hybrid",
+      "observationMode": "unified", // new installs; existing configs without this field stay directional
       "sessionStrategy": "per-directory",
       "removeUserPrefix": true // true uses the bare peerName; false (default on upgrade) keeps the legacy user-<peerName> peer
     }
@@ -107,6 +108,27 @@ If OpenCode is running in Docker or another remote environment, `localhost` may 
 | `chat-instance` | Session follows the current chat instance | Highly ephemeral usage |
 | `global` | One session for everything | Shared memory across all work |
 
+### Observation Mode
+
+Controls which Honcho collection `honcho_chat` and `honcho_create_conclusion` use for the user. Changing modes does not migrate existing conclusions.
+
+| Mode | Collection | Best for |
+| --- | --- | --- |
+| `unified` (default on new installs) | The user's self-collection (`observer=user`, `observed=user`) | Shared workspaces where multiple agents should recall each other's conclusions about the user |
+| `directional` (existing installs until set) | This AI peer's view of the user (`observer=aiPeer`, `observed=user`) | Isolated per-agent memory; previous OpenCode behavior |
+
+New `~/.honcho/config.json` files stamp `observationMode: "unified"`. Configs that predate the field keep **directional** so an upgrade does not orphan already-derived memory.
+
+```json
+{
+  "hosts": {
+    "opencode": {
+      "observationMode": "unified"
+    }
+  }
+}
+```
+
 ## Operator Commands
 
 | Command | Description |
@@ -127,8 +149,8 @@ The plugin exposes these tools inside OpenCode:
 | `honcho_get_config` | Read effective and persisted settings |
 | `honcho_set_config` | Update a persisted shared setting |
 | `honcho_search` | Search Honcho session messages in the current session |
-| `honcho_chat` | Query Honcho for reasoning-backed context |
-| `honcho_create_conclusion` | Save a durable memory conclusion |
+| `honcho_chat` | Query Honcho for reasoning-backed context (observer follows `observationMode`) |
+| `honcho_create_conclusion` | Save a durable memory conclusion (same observer as `honcho_chat`) |
 
 ## Plugin Surfaces
 

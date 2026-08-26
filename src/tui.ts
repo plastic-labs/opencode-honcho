@@ -10,7 +10,7 @@ const SHARED_SETTINGS_FILE_NAME = "config.json"
 
 const SHARED_CONFIG_PRESETS: Record<string, readonly string[]> = {
   recallmode: ["hybrid", "context", "tools"],
-  observationmode: ["directional"],
+  observationmode: ["unified", "directional"],
   peermodel: ["classic", "hierarchical"],
   sessionstrategy: ["per-repo", "per-directory", "per-session", "global", "git-branch", "chat-instance"],
   dialecticreasoninglevel: ["minimal", "low", "medium", "high", "max"],
@@ -23,6 +23,7 @@ const MODE_EDITABLE_FIELD_PATHS = [
   "hosts.opencode.workspace",
   "hosts.opencode.aiPeer",
   "hosts.opencode.recallMode",
+  "hosts.opencode.observationMode",
   "hosts.opencode.sessionStrategy",
 ] as const
 
@@ -35,6 +36,7 @@ type GlobalSettings = {
       workspace?: string
       aiPeer?: string
       recallMode?: "hybrid" | "context" | "tools"
+      observationMode?: "unified" | "directional"
       sessionStrategy?: "per-repo" | "per-directory" | "per-session" | "global" | "git-branch" | "chat-instance"
     }
   }
@@ -234,6 +236,7 @@ const settingsMessage = (settings: GlobalSettings) => {
     `Workspace: ${host.workspace || "opencode"}`,
     `AI peer: ${host.aiPeer || "opencode"}`,
     `Recall mode: ${host.recallMode || "hybrid"}`,
+    `Observation mode: ${host.observationMode || "directional"}`,
     `Session strategy: ${host.sessionStrategy || "per-directory"}`,
   ].join("\n")
 }

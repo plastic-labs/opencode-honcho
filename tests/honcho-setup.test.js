@@ -132,6 +132,7 @@ test("honcho_setup writes shared Honcho config with root peerName and hosts.open
         recallMode: "hybrid",
         sessionStrategy: "per-directory",
         removeUserPrefix: true,
+        observationMode: "unified",
       })
       expect("linkedHosts" in persisted.hosts.opencode).toBe(false)
       expect(result.persistedFields).toContain("peerName")
@@ -194,7 +195,7 @@ test("honcho_status reads effective settings from shared hosts.opencode config",
     expect(result.workspaceName).toBe("opencode")
     expect(typeof result.sessionName).toBe("string")
     expect(result.sessionName).toContain("opencode")
-    expect(result.observationMode).toBeUndefined()
+    expect(result.observationMode).toBe("directional")
     expect(result.peers.userPeer.observe_me).toBe(true)
     expect(result.peers.rootAgentPeer.observe_others).toBe(true)
     expect(result.peers.rootAgentPeer.observeOthers).toBeUndefined()
@@ -670,7 +671,7 @@ test("honcho_status uses the project worktree to derive per-directory session ke
   })
 })
 
-test("fresh install ships removeUserPrefix=true and drops the user- prefix", async () => {
+test("fresh install ships removeUserPrefix=true, observationMode=unified, and drops the user- prefix", async () => {
   const rootDir = await mkdtemp(path.join(os.tmpdir(), "honcho-fresh-prefix-root-"))
   const homeDir = await mkdtemp(path.join(os.tmpdir(), "honcho-fresh-prefix-home-"))
   const sharedConfigPath = path.join(homeDir, ".honcho", "config.json")
@@ -683,20 +684,22 @@ test("fresh install ships removeUserPrefix=true and drops the user- prefix", asy
       const persisted = JSON.parse(await readFile(sharedConfigPath, "utf-8"))
 
       expect(result.removeUserPrefix).toBe(true)
+      expect(result.observationMode).toBe("unified")
       expect(result.peers.userPeer.id).toBe("alice")
       expect(persisted.hosts.opencode.removeUserPrefix).toBe(true)
+      expect(persisted.hosts.opencode.observationMode).toBe("unified")
     },
   )
 })
 
-test("upgrading install (existing config) keeps removeUserPrefix=false and the user- prefix", async () => {
+test("upgrading install (existing config) keeps removeUserPrefix=false, directional observation, and the user- prefix", async () => {
   const rootDir = await mkdtemp(path.join(os.tmpdir(), "honcho-legacy-prefix-root-"))
   const homeDir = await mkdtemp(path.join(os.tmpdir(), "honcho-legacy-prefix-home-"))
   const sharedConfigDir = path.join(homeDir, ".honcho")
   const sharedConfigPath = path.join(sharedConfigDir, "config.json")
 
-  // Config predates removeUserPrefix — the false default must apply and the file
-  // must not be mutated on a plain status read.
+  // Config predates removeUserPrefix / observationMode — the legacy defaults
+  // must apply and the file must not be mutated on a plain status read.
   await mkdir(sharedConfigDir, { recursive: true })
   const initialConfig = {
     peerName: "alice",
@@ -712,6 +715,7 @@ test("upgrading install (existing config) keeps removeUserPrefix=false and the u
     const persisted = JSON.parse(await readFile(sharedConfigPath, "utf-8"))
 
     expect(result.removeUserPrefix).toBe(false)
+    expect(result.observationMode).toBe("directional")
     expect(result.peers.userPeer.id).toBe("user-alice")
     expect(persisted).toEqual(initialConfig)
   })
