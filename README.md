@@ -26,6 +26,8 @@ To update an existing plugin install:
 opencode plugin "@honcho-ai/opencode-honcho" --force
 ```
 
+Existing installs keep **directional** observation until you choose. After updating, OpenCode prompts you to keep directional or switch to unified (also via `/honcho:setup` or `/honcho:config`). If you switch to unified, you can optionally run `/honcho:import` to reingest local OpenCode transcripts into the new collection.
+
 This command expects the `opencode` CLI to already be installed and available on your `PATH`.
 If your shell cannot find `opencode`, restart your shell or source your shell config and run the command again.
 
@@ -37,6 +39,7 @@ If your shell cannot find `opencode`, restart your shell or source your shell co
 4. Enter your Honcho API key
 5. Enter your `peerName`
 6. Run `/honcho:status` to verify the runtime
+7. If you are upgrading an existing install, choose directional vs unified when prompted. After switching to unified, optionally run `/honcho:import` to backfill local history
 
 ## What You Get
 
@@ -118,7 +121,7 @@ Controls which Honcho collection `honcho_chat` and `honcho_create_conclusion` us
 | `unified` (default on new installs) | The user's self-collection (`observer=user`, `observed=user`) | Shared workspaces where multiple agents should recall each other's conclusions about the user |
 | `directional` (existing installs until set) | This AI peer's view of the user (`observer=aiPeer`, `observed=user`) | Isolated per-agent memory; previous OpenCode behavior |
 
-New `~/.honcho/config.json` files stamp `observationMode: "unified"`. Configs that predate the field keep **directional** so an upgrade does not orphan already-derived memory.
+New `~/.honcho/config.json` files stamp `observationMode: "unified"`. Configs that predate the field keep **directional** so an upgrade does not orphan already-derived memory. After updating, OpenCode prompts you to keep directional or switch to unified (`/honcho:setup`, `/honcho:config`, or the TUI launch dialog). If you switch, optionally run `/honcho:import` to reingest local OpenCode transcripts:
 
 ```json
 {

@@ -63,14 +63,16 @@ test("settings message shows config values separately from status messaging", ()
         aiPeer: "opencode",
         recallMode: "hybrid",
         sessionStrategy: "per-directory",
+        observationMode: "directional",
       },
     },
   })
 
   assert.match(message, /Config path:/)
-  assert.match(message, /Peer name: user/)
+  assert.match(message, /Recall mode: hybrid/)
   assert.match(message, /Observation mode: directional/)
   assert.match(message, /Agent observe me: false/)
+  assert.doesNotMatch(message, /Observation:/)
 })
 
 test("status and settings messages are distinct surfaces", () => {
@@ -84,6 +86,7 @@ test("status and settings messages are distinct surfaces", () => {
         aiPeer: "opencode",
         recallMode: "hybrid",
         sessionStrategy: "per-directory",
+        observationMode: "unified",
       },
     },
   }

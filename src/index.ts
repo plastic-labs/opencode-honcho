@@ -3,6 +3,13 @@ import { mkdir, readFile, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { tool, type Plugin, type PluginInput } from "@opencode-ai/plugin"
 import { Honcho } from "@honcho-ai/sdk"
+import {
+  needsObservationUpgradePrompt,
+  observationUpgradeNextSteps,
+  observationUpgradeNotice,
+  stampedHostObservationMode,
+  unifiedImportFollowUp,
+} from "./observation-upgrade.js"
 
 type RecallMode = "hybrid" | "context" | "tools"
 type ObservationMode = "unified" | "directional"
@@ -33,7 +40,10 @@ type HonchoSettings = {
 }
 
 type HostScopedSettings = Partial<
-  Pick<HonchoSettings, "workspace" | "aiPeer" | "recallMode" | "observationMode" | "agentObserveMe" | "sessionStrategy" | "removeUserPrefix">
+  Pick<
+    HonchoSettings,
+    "workspace" | "aiPeer" | "recallMode" | "observationMode" | "agentObserveMe" | "sessionStrategy" | "removeUserPrefix"
+  >
 >
 
 type RuntimeHandle = {
@@ -375,6 +385,17 @@ const applyRawLayer = (target: HonchoSettings, raw: Record<string, unknown>) => 
       // true, so a stray "false" can't be truthy and silently flip the prefix.
       ;(target as Record<string, unknown>)[key] =
         value === true || (typeof value === "string" && value.trim().toLowerCase() === "true")
+      continue
+    }
+    if (key in ENUM_KEYS) {
+      if (typeof value !== "string") {
+        continue
+      }
+      const expanded = expandEnv(value)
+      if (!ENUM_KEYS[key].has(expanded)) {
+        continue
+      }
+      ;(target as Record<string, unknown>)[key] = expanded
       continue
     }
     if (typeof value === "string") {
@@ -923,7 +944,7 @@ const createActiveRuntime = async (
     configuration: { observeMe: true },
   })
   const agentPeer = await honcho.peer(handle.activeAgentPeerId, {
-    configuration: { observeMe: true },
+    configuration: { observeMe: resolveAgentObserveMe(handle.config) },
   })
   const session = await honcho.session(handle.sessionKey)
   await session.addPeers(sessionPeerAdditions(buildPeerTopology(handle)) as never)
@@ -1134,6 +1155,12 @@ export const createHonchoRuntimePlugin =
     const runtimeStatus = async (input: Record<string, unknown> | undefined) => {
       const handle = await deriveRuntimeHandle(pluginInput, input, configPath)
       const state = getState(deriveSessionStateKey(handle))
+      const globalRaw = await readJsonFile(handle.globalConfigPath)
+      const observationModeStamped = stampedHostObservationMode(globalRaw)
+      const upgradeNotice =
+        hasConfiguredAuth(handle.config) && needsObservationUpgradePrompt(globalRaw)
+          ? observationUpgradeNotice()
+          : null
       return {
         ok: true,
         configPath: handle.configPath,
@@ -1147,6 +1174,13 @@ export const createHonchoRuntimePlugin =
         sessionName: handle.sessionKey,
         recallMode: handle.config.recallMode,
         observationMode: handle.config.observationMode,
+        observationModeStamped: Boolean(observationModeStamped),
+        ...(upgradeNotice
+          ? {
+              observationModeNotice: upgradeNotice,
+              nextSteps: observationUpgradeNextSteps(),
+            }
+          : {}),
         agentObserveMe: handle.config.agentObserveMe,
         sessionStrategy: handle.config.sessionStrategy,
         peerName: handle.config.peerName,
@@ -1506,12 +1540,13 @@ export const createHonchoRuntimePlugin =
         }),
         honcho_setup: tool({
           description:
-            "Validate Honcho setup for OpenCode and persist shared Honcho credentials or a localhost baseUrl to ~/.honcho/config.json when provided.",
+            "Validate Honcho setup for OpenCode and persist shared Honcho credentials or a localhost baseUrl to ~/.honcho/config.json when provided. On upgrades where observationMode is unset, relay observationModeNotice and ask the user to keep directional or switch to unified before calling honcho_set_config. If they choose unified, mention /honcho:import.",
           args: {
             apiKey: tool.schema.string().optional(),
             baseUrl: tool.schema.string().optional(),
             peerName: tool.schema.string().optional(),
             persistGlobal: tool.schema.boolean().optional(),
+            observationMode: tool.schema.string().optional(),
           },
           async execute(args, context) {
             let resolvedGlobalConfigPath = sharedGlobalSettingsPath()
@@ -1525,6 +1560,8 @@ export const createHonchoRuntimePlugin =
               const providedApiKey = typeof args.apiKey === "string" ? args.apiKey.trim() : ""
               const providedBaseUrl = typeof args.baseUrl === "string" ? args.baseUrl.trim() : ""
               const providedPeerName = typeof args.peerName === "string" ? args.peerName.trim() : ""
+              const providedObservationMode =
+                typeof args.observationMode === "string" ? args.observationMode.trim() : ""
               const effectiveApiKey = providedApiKey || handle.config.apiKey || ""
               const effectiveBaseUrl =
                 providedBaseUrl || (providedApiKey ? DEFAULT_SETTINGS.baseUrl : handle.config.baseUrl || DEFAULT_SETTINGS.baseUrl)
@@ -1556,11 +1593,18 @@ export const createHonchoRuntimePlugin =
                   },
                 )
                 const existingHost = isRecord(nextHosts.opencode) ? nextHosts.opencode : {}
+                const observationModeValue = providedObservationMode
+                  ? (parseSettingValue("observationMode", providedObservationMode) as ObservationMode)
+                  : undefined
                 nextHosts.opencode = {
                   ...existingHost,
                   ...hostDefaults(nextResolved),
+                  ...(observationModeValue ? { observationMode: observationModeValue } : {}),
                 }
                 nextGlobal.hosts = nextHosts
+                if (observationModeValue) {
+                  persistedFields.push("observationMode")
+                }
                 if (providedBaseUrl || providedApiKey) {
                   persistedFields.push("baseUrl")
                 }
@@ -1572,19 +1616,29 @@ export const createHonchoRuntimePlugin =
                 apiKey: effectiveApiKey,
                 baseUrl: effectiveBaseUrl,
               })
+              const status = await runtimeStatus({ sessionID: context.sessionID })
+              const readyMessage = effectiveApiKey
+                ? effectiveBaseUrl === DEFAULT_SETTINGS.baseUrl
+                  ? `Honcho setup is ready for cloud mode at ${DEFAULT_SETTINGS.baseUrl}.`
+                  : `Honcho setup is ready with endpoint ${effectiveBaseUrl}.`
+                : isLocalBaseUrl(effectiveBaseUrl)
+                  ? `Honcho setup is ready for local mode at ${effectiveBaseUrl}.`
+                  : "No Honcho API key is configured. Pass one to /honcho:setup <key> or set HONCHO_API_KEY before running setup. For a local Honcho instance, set baseUrl to http://127.0.0.1:8000 or http://localhost:8000."
+              const upgradeNotice =
+                typeof status.observationModeNotice === "string" ? status.observationModeNotice : null
               return JSON.stringify(
                 {
                   ok: configured,
                   globalConfigPath: handle.globalConfigPath,
                   persistedFields,
-                  message: effectiveApiKey
-                    ? effectiveBaseUrl === DEFAULT_SETTINGS.baseUrl
-                      ? `Honcho setup is ready for cloud mode at ${DEFAULT_SETTINGS.baseUrl}.`
-                      : `Honcho setup is ready with endpoint ${effectiveBaseUrl}.`
-                    : isLocalBaseUrl(effectiveBaseUrl)
-                      ? `Honcho setup is ready for local mode at ${effectiveBaseUrl}.`
-                      : "No Honcho API key is configured. Pass one to /honcho:setup <key> or set HONCHO_API_KEY before running setup. For a local Honcho instance, set baseUrl to http://127.0.0.1:8000 or http://localhost:8000.",
-                  status: await runtimeStatus({ sessionID: context.sessionID }),
+                  message: upgradeNotice ? `${readyMessage} ${upgradeNotice}` : readyMessage,
+                  ...(upgradeNotice
+                    ? {
+                        observationModeNotice: upgradeNotice,
+                        nextSteps: observationUpgradeNextSteps(),
+                      }
+                    : {}),
+                  status,
                 },
                 null,
                 2,
@@ -1605,7 +1659,8 @@ export const createHonchoRuntimePlugin =
           },
         }),
         honcho_status: tool({
-          description: "Show effective Honcho status for this OpenCode project, including workspace, peers, sessions, and memory mode.",
+          description:
+            "Show effective Honcho status for this OpenCode project, including workspace, peers, sessions, and memory mode. If observationModeNotice is set, tell the user they are still on directional, explain unified vs directional, and that they can switch then optionally run /honcho:import.",
           args: {},
           async execute(_args, context) {
             return JSON.stringify(await runtimeStatus({ sessionID: context.sessionID }), null, 2)
@@ -1621,8 +1676,10 @@ export const createHonchoRuntimePlugin =
           async execute(args, context) {
             const handle = await deriveRuntimeHandle(pluginInput, { sessionID: context.sessionID }, configPath)
             let field: string
+            let nextValue: unknown
             try {
               field = parseSettingField(args.field)
+              nextValue = parseSettingValue(field, args.value)
             } catch (error) {
               return JSON.stringify(
                 { ok: false, error: error instanceof Error ? error.message : String(error) },
@@ -1632,16 +1689,19 @@ export const createHonchoRuntimePlugin =
             }
             const persisted = await readConfigFile(handle.configPath)
             const nextPersisted = { ...persisted }
-            const nextValue = parseSettingValue(field, args.value)
             setSettingValue(nextPersisted, field, nextValue)
             await writeSettings(handle.configPath, nextPersisted)
+            const status = await runtimeStatus({ sessionID: context.sessionID })
             return JSON.stringify(
               {
                 ok: true,
                 configPath: handle.configPath,
                 field,
                 value: nextValue,
-                status: await runtimeStatus({ sessionID: context.sessionID }),
+                ...(field === "observationMode" && nextValue === "unified"
+                  ? { message: unifiedImportFollowUp() }
+                  : {}),
+                status,
               },
               null,
               2,

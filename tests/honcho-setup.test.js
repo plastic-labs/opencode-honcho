@@ -199,7 +199,7 @@ test("honcho_status reads effective settings from shared hosts.opencode config",
     expect(result.agentObserveMe).toBe(false)
     expect(result.peers.userPeer.observe_me).toBe(true)
     expect(result.peers.rootAgentPeer.observe_others).toBe(true)
-    expect(result.peers.rootAgentPeer.observeOthers).toBeUndefined()
+    expect(result.peers.rootAgentPeer.observeMe).toBeUndefined()
     expect(result.peers.rootAgentPeer.observe_me).toBe(false)
   })
 })
@@ -718,6 +718,7 @@ test("upgrading install (existing config) keeps removeUserPrefix=false, directio
 
     expect(result.removeUserPrefix).toBe(false)
     expect(result.observationMode).toBe("directional")
+    expect(result.observationModeNotice).toMatch(/\/honcho:import/)
     expect(result.peers.userPeer.id).toBe("user-alice")
     expect(persisted).toEqual(initialConfig)
   })
