@@ -70,6 +70,7 @@ test("settings message shows config values separately from status messaging", ()
   assert.match(message, /Config path:/)
   assert.match(message, /Peer name: user/)
   assert.match(message, /Observation mode: directional/)
+  assert.match(message, /Agent observe me: false/)
 })
 
 test("status and settings messages are distinct surfaces", () => {
@@ -113,6 +114,7 @@ test("honcho config only exposes top-level and hosts.opencode fields", () => {
     "hosts.opencode.aiPeer",
     "hosts.opencode.recallMode",
     "hosts.opencode.observationMode",
+    "hosts.opencode.agentObserveMe",
     "hosts.opencode.sessionStrategy",
   ])
   assert.equal(__testing.modeEditableFieldPaths().includes("hosts.claude_code.workspace"), false)
@@ -143,6 +145,7 @@ test("shared config preset options expose enum and boolean values", () => {
     "unified",
     "directional",
   ])
+  assert.deepEqual(__testing.sharedConfigPresetOptions("agentObserveMe", true), ["true", "false"])
   assert.deepEqual(__testing.sharedConfigPresetOptions("saveMessages", true), ["true", "false"])
 })
 

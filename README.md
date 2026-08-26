@@ -46,7 +46,7 @@ If your shell cannot find `opencode`, restart your shell or source your shell co
 - **Session Mapping** - Sessions can be scoped per directory, repo, branch, chat instance, or globally
 - **Durable Writes** - Honcho can retain stable conclusions and session context
 - **Memory Retrieval** - Search memory, query Honcho knowledge, and inject relevant context into prompts
-- **Peer Modeling** - User and root-agent observation flags are configurable (`observationMode`)
+- **Peer Modeling** - User and root-agent observation flags are configurable (`observationMode`, `agentObserveMe`)
 
 ## Installation Output
 
@@ -76,6 +76,7 @@ OpenCode reads and writes this shared config file directly. OpenCode-specific de
       "aiPeer": "opencode",
       "recallMode": "hybrid",
       "observationMode": "unified", // new installs; existing configs without this field stay directional
+      "agentObserveMe": false, // true opts into self-observation on the root agent peer
       "sessionStrategy": "per-directory",
       "removeUserPrefix": true // true uses the bare peerName; false (default on upgrade) keeps the legacy user-<peerName> peer
     }
@@ -124,6 +125,20 @@ New `~/.honcho/config.json` files stamp `observationMode: "unified"`. Configs th
   "hosts": {
     "opencode": {
       "observationMode": "unified"
+    }
+  }
+}
+```
+
+### Agent self-observation
+
+The root agent peer is created with `observeMe: false` by default, matching Claude Code: Honcho models the user, not the assistant. Set `agentObserveMe` to `true` if you want a peer card / representation of the agent itself.
+
+```json
+{
+  "hosts": {
+    "opencode": {
+      "agentObserveMe": true
     }
   }
 }

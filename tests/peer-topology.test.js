@@ -14,7 +14,7 @@ test("root sessions keep user and root agent as peers", () => {
 
   expect(topology.sessionPeerConfigs).toEqual({
     "user": { observeMe: true, observeOthers: false },
-    opencode: { observeMe: true, observeOthers: true },
+    opencode: { observeMe: false, observeOthers: true },
   })
   expect(topology.describedPeers.childAgentPeer).toBeNull()
   expect(topology.describedPeers.parentAgentObserverPeer).toBeNull()
@@ -32,7 +32,7 @@ test("classic peer model keeps delegated sessions on the Claude-style user and a
 
   expect(topology.sessionPeerConfigs).toEqual({
     "user": { observeMe: true, observeOthers: false },
-    opencode: { observeMe: true, observeOthers: true },
+    opencode: { observeMe: false, observeOthers: true },
   })
   expect(topology.describedPeers.childAgentPeer).toBeNull()
   expect(topology.describedPeers.parentAgentObserverPeer).toBeNull()
@@ -51,4 +51,22 @@ test("local session state keys off the effective Honcho session key, not the raw
   expect(__testing.deriveSessionStateKey(rootHandle)).toBe(rootHandle.sessionKey)
   expect(__testing.deriveSessionStateKey(delegatedHandle)).toBe(delegatedHandle.sessionKey)
   expect(__testing.deriveSessionStateKey(rootHandle)).not.toBe(__testing.deriveSessionStateKey(delegatedHandle))
+})
+
+test("agentObserveMe true turns on self-observation on the root agent peer", () => {
+  const topology = __testing.buildPeerTopology({
+    config: { agentObserveMe: true },
+    userPeerId: "user",
+    rootAgentPeerId: "opencode",
+    activeAgentPeerId: "opencode",
+    childAgentPeerId: null,
+    parentAgentObserverPeerId: null,
+  })
+
+  expect(topology.sessionPeerConfigs).toEqual({
+    user: { observeMe: true, observeOthers: false },
+    opencode: { observeMe: true, observeOthers: true },
+  })
+  expect(topology.describedPeers.rootAgentPeer.observeMe).toBe(true)
+  expect(topology.describedPeers.userPeer.observeMe).toBe(true)
 })

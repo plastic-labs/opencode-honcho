@@ -27,12 +27,13 @@ type HonchoSettings = {
   workspace: string
   recallMode: RecallMode
   observationMode: ObservationMode
+  agentObserveMe: boolean
   sessionStrategy: SessionStrategy
   removeUserPrefix: boolean
 }
 
 type HostScopedSettings = Partial<
-  Pick<HonchoSettings, "workspace" | "aiPeer" | "recallMode" | "observationMode" | "sessionStrategy" | "removeUserPrefix">
+  Pick<HonchoSettings, "workspace" | "aiPeer" | "recallMode" | "observationMode" | "agentObserveMe" | "sessionStrategy" | "removeUserPrefix">
 >
 
 type RuntimeHandle = {
@@ -115,6 +116,9 @@ const DEFAULT_SETTINGS: HonchoSettings = {
   // Fallback for configs that predate this field: keep directional so existing
   // installs do not silently switch collections. New installs stamp unified.
   observationMode: "directional",
+  // Default false matches claude-honcho: do not spend deriver work on a model of
+  // the assistant. Set true to opt into agent self-observation / peer card.
+  agentObserveMe: false,
   sessionStrategy: "per-directory",
   // Default false for everyone, including upgrading installs: an existing user
   // keeps their `user-<peerName>` peer and its memory. New installs are stamped
@@ -133,7 +137,7 @@ const INTERNAL_CONTEXT_REFRESH: ContextRefreshSettings = {
   useSessionStartDialectic: true,
 }
 
-const BOOLEAN_KEYS = new Set<keyof HonchoSettings>(["removeUserPrefix"])
+const BOOLEAN_KEYS = new Set<keyof HonchoSettings>(["removeUserPrefix", "agentObserveMe"])
 
 const ENUM_KEYS: Record<string, ReadonlySet<string>> = {
   recallMode: new Set(["hybrid", "context", "tools"]),
@@ -149,6 +153,7 @@ const HOST_SETTING_FIELDS = new Set<keyof HonchoSettings>([
   "aiPeer",
   "recallMode",
   "observationMode",
+  "agentObserveMe",
   "sessionStrategy",
   "removeUserPrefix",
 ])
@@ -161,6 +166,7 @@ const SETTING_FIELD_PATHS = new Set([
   "workspace",
   "recallMode",
   "observationMode",
+  "agentObserveMe",
   "sessionStrategy",
   "removeUserPrefix",
 ])
@@ -842,6 +848,9 @@ const deriveRuntimeHandle = async (
 
 const deriveSessionStateKey = (handle: Pick<RuntimeHandle, "sessionId" | "sessionKey">) => handle.sessionKey || handle.sessionId
 
+const resolveAgentObserveMe = (settings: Pick<HonchoSettings, "agentObserveMe"> | Record<string, unknown> | undefined) =>
+  settings && "agentObserveMe" in settings ? settings.agentObserveMe !== false : DEFAULT_SETTINGS.agentObserveMe
+
 const isUnifiedObservation = (settings: Pick<HonchoSettings, "observationMode"> | Record<string, unknown> | undefined) =>
   settings?.observationMode === "unified"
 
@@ -871,6 +880,7 @@ const buildPeerTopology = (handle: Pick<
   RuntimeHandle,
   "config" | "userPeerId" | "rootAgentPeerId" | "activeAgentPeerId" | "childAgentPeerId" | "parentAgentObserverPeerId"
 >): PeerTopology => {
+  const agentObserveMe = resolveAgentObserveMe(handle.config)
   const userPeer: PeerDescription = {
     id: handle.userPeerId,
     observeMe: true,
@@ -878,13 +888,13 @@ const buildPeerTopology = (handle: Pick<
   }
   const rootAgentPeer: PeerDescription = {
     id: handle.rootAgentPeerId,
-    observeMe: true,
+    observeMe: agentObserveMe,
     observeOthers: true,
   }
   return {
     sessionPeerConfigs: {
       [userPeer.id]: { observeMe: true, observeOthers: false },
-      [rootAgentPeer.id]: { observeMe: true, observeOthers: true },
+      [rootAgentPeer.id]: { observeMe: agentObserveMe, observeOthers: true },
     },
     describedPeers: {
       userPeer,
@@ -1137,6 +1147,7 @@ export const createHonchoRuntimePlugin =
         sessionName: handle.sessionKey,
         recallMode: handle.config.recallMode,
         observationMode: handle.config.observationMode,
+        agentObserveMe: handle.config.agentObserveMe,
         sessionStrategy: handle.config.sessionStrategy,
         peerName: handle.config.peerName,
         removeUserPrefix: handle.config.removeUserPrefix,
@@ -1449,6 +1460,9 @@ export const createHonchoRuntimePlugin =
       "experimental.session.compacting": async (input, output) => {
         const handle = await deriveRuntimeHandle(pluginInput, input, configPath)
         const state = getState(deriveSessionStateKey(handle))
+        const topology = buildPeerTopology(handle)
+        const rootAgent = topology.describedPeers.rootAgentPeer
+        const userPeer = topology.describedPeers.userPeer
         output.context = output.context || []
         output.context.push(
           [
@@ -1457,8 +1471,8 @@ export const createHonchoRuntimePlugin =
             `Session key: ${handle.sessionKey}`,
             `Recall mode: ${handle.config.recallMode}`,
             `Observation mode: ${handle.config.observationMode}`,
-            `User peer: ${handle.userPeerId} (observe_me=true, observe_others=false)`,
-            `Root agent peer: ${handle.rootAgentPeerId} (observe_me=true, observe_others=true)`,
+            `User peer: ${userPeer.id} (observe_me=${userPeer.observeMe}, observe_others=${userPeer.observeOthers})`,
+            `Root agent peer: ${rootAgent.id} (observe_me=${rootAgent.observeMe}, observe_others=${rootAgent.observeOthers})`,
             handle.childAgentPeerId
               ? `Child agent peer: ${handle.childAgentPeerId} (observe_me=true, observe_others=false, session_scoped=true)`
               : "Child agent peer: none",
@@ -1770,5 +1784,6 @@ export const __testing = {
   normalizeId,
   sessionPeerAdditions,
   resolveUserMemoryQuery,
+  resolveAgentObserveMe,
 }
 export default HonchoRuntimePlugin
