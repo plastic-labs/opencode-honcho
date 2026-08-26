@@ -98,10 +98,11 @@ test("native TUI Honcho commands register slash aliases for setup, status, setti
     "honcho.status",
     "honcho.settings",
     "honcho.config",
+    "honcho.import",
   ])
   assert.deepEqual(
     commands.map((command) => command.slash?.name),
-    ["honcho:setup", "honcho:status", "honcho:settings", "honcho:config"],
+    ["honcho:setup", "honcho:status", "honcho:settings", "honcho:config", "honcho:import"],
   )
 })
 

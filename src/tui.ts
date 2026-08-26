@@ -2,6 +2,8 @@ import { mkdir, readFile, writeFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import path from "node:path"
 import type { TuiPlugin, TuiPluginModule } from "@opencode-ai/plugin/tui"
+import { Honcho } from "@honcho-ai/sdk"
+import { executeOpenCodeImport, planOpenCodeImport, resolveImportPeerIds } from "./import.js"
 
 const PACKAGE_ID = "@honcho-ai/opencode-honcho"
 const DEFAULT_BASE_URL = "https://api.honcho.dev"
@@ -41,6 +43,7 @@ type GlobalSettings = {
       observationMode?: "unified" | "directional"
       agentObserveMe?: boolean
       sessionStrategy?: "per-repo" | "per-directory" | "per-session" | "global" | "git-branch" | "chat-instance"
+      removeUserPrefix?: boolean
     }
   }
 }
@@ -307,6 +310,140 @@ const openSettingsDialog = async (api: Parameters<TuiPlugin>[0]) => {
     api.ui.DialogAlert({
       title: "Honcho Settings",
       message: settingsMessage(settings),
+    }),
+  )
+}
+
+const importConfigFromSettings = (settings: GlobalSettings) => {
+  const host = settings.hosts?.opencode || {}
+  const workspaceId = (host.workspace || "opencode").trim() || "opencode"
+  const aiPeer = host.aiPeer || "opencode"
+  const { userPeerId, agentPeerId } = resolveImportPeerIds(
+    settings.peerName || "user",
+    aiPeer,
+    host.removeUserPrefix === true,
+  )
+  return {
+    apiKey: settings.apiKey || "",
+    baseUrl: settings.baseUrl || DEFAULT_BASE_URL,
+    workspaceId,
+    userPeerId,
+    agentPeerId,
+    sessionStrategy: host.sessionStrategy || "per-directory",
+    agentObserveMe: host.agentObserveMe === true,
+  }
+}
+
+const formatImportPreview = (plan: Awaited<ReturnType<typeof planOpenCodeImport>>) => {
+  const lines = [
+    `Database: ${plan.dbPath}`,
+    `Window: last ${plan.days} days`,
+    `Ready to import: ${plan.sessionCount} session(s), ${plan.messageCount} message(s)`,
+    `Already imported: ${plan.alreadyImportedCount}`,
+    `Skipped empty: ${plan.skippedCount}`,
+    "",
+  ]
+  for (const session of plan.sessions.filter((item) => !item.skippedReason).slice(0, 12)) {
+    lines.push(`- ${session.title} (${session.messageCount} msg)`)
+  }
+  if (plan.sessionCount > 12) lines.push(`- … and ${plan.sessionCount - 12} more`)
+  return lines.join("\n")
+}
+
+const openImportDialog = async (api: Parameters<TuiPlugin>[0]) => {
+  const settings = await readGlobalSettings()
+  const configured = Boolean(settings.apiKey?.trim()) || isLocalBaseUrl(settings.baseUrl || "")
+  if (!configured) {
+    api.ui.dialog.replace(() =>
+      api.ui.DialogAlert({
+        title: "Honcho import",
+        message: "Run /honcho:setup before importing local OpenCode transcripts.",
+      }),
+    )
+    return
+  }
+
+  const config = importConfigFromSettings(settings)
+  let plan: Awaited<ReturnType<typeof planOpenCodeImport>>
+  try {
+    plan = await planOpenCodeImport({
+      workspaceId: config.workspaceId,
+      sessionStrategy: config.sessionStrategy,
+      agentPeerId: config.agentPeerId,
+    })
+  } catch (error) {
+    api.ui.dialog.replace(() =>
+      api.ui.DialogAlert({
+        title: "Honcho import",
+        message: error instanceof Error ? error.message : String(error),
+      }),
+    )
+    return
+  }
+
+  const preview = formatImportPreview(plan)
+  if (plan.sessionCount === 0) {
+    api.ui.dialog.replace(() =>
+      api.ui.DialogAlert({
+        title: "Honcho import",
+        message: `${preview}\n\nNothing new to import.`,
+      }),
+    )
+    return
+  }
+
+  api.ui.dialog.replace(() =>
+    api.ui.DialogSelect({
+      title: "Import local OpenCode transcripts into Honcho?",
+      flat: true,
+      options: [
+        { title: "Preview only", value: "preview", description: "Do not upload" },
+        { title: "Upload now", value: "upload", description: "Sends conversation content to Honcho" },
+      ],
+      onSelect: (option) => {
+        if (option.value !== "upload") {
+          api.ui.dialog.replace(() =>
+            api.ui.DialogAlert({
+              title: "Honcho import preview",
+              message: preview,
+            }),
+          )
+          return
+        }
+        void (async () => {
+          try {
+            const honcho = new Honcho({
+              apiKey: config.apiKey || undefined,
+              baseURL: config.baseUrl || undefined,
+              workspaceId: config.workspaceId,
+            })
+            const result = await executeOpenCodeImport({
+              workspaceId: config.workspaceId,
+              sessionStrategy: config.sessionStrategy,
+              agentPeerId: config.agentPeerId,
+              honcho,
+              userPeerId: config.userPeerId,
+              agentObserveMe: config.agentObserveMe,
+            })
+            api.ui.dialog.replace(() =>
+              api.ui.DialogAlert({
+                title: "Honcho import",
+                message: [
+                  `Imported ${result.uploadedMessages} message(s) across ${result.uploadedSessions} session(s) into ${config.workspaceId}.`,
+                  result.errors.length > 0 ? `${result.errors.length} session(s) failed.` : "Honcho will reason over them; no restart needed.",
+                ].join("\n"),
+              }),
+            )
+          } catch (error) {
+            api.ui.dialog.replace(() =>
+              api.ui.DialogAlert({
+                title: "Honcho import failed",
+                message: error instanceof Error ? error.message : String(error),
+              }),
+            )
+          }
+        })()
+      },
     }),
   )
 }
@@ -582,6 +719,18 @@ const buildCommands = (api: Parameters<TuiPlugin>[0]) => [
     },
     onSelect: () => {
       void openModeDialog(api)
+    },
+  },
+  {
+    title: "Honcho Import",
+    value: "honcho.import",
+    description: "Preview or import local OpenCode transcripts into Honcho",
+    category: "Honcho",
+    slash: {
+      name: "honcho:import",
+    },
+    onSelect: () => {
+      void openImportDialog(api)
     },
   },
 ]

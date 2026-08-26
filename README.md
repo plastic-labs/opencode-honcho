@@ -111,7 +111,7 @@ If OpenCode is running in Docker or another remote environment, `localhost` may 
 
 ### Observation Mode
 
-Controls which Honcho collection `honcho_chat` and `honcho_create_conclusion` use for the user. Changing modes does not migrate existing conclusions.
+Controls which Honcho collection `honcho_chat` and `honcho_create_conclusion` use for the user. This is independent of `agentObserveMe` (whether the agent peer is modeled). Changing modes does not migrate existing conclusions — use `/honcho:import` to backfill local OpenCode transcripts so Honcho can derive into the new collection.
 
 | Mode | Collection | Best for |
 | --- | --- | --- |
@@ -152,6 +152,15 @@ The root agent peer is created with `observeMe: false` by default, matching Clau
 | `/honcho:status` | Show effective Honcho status for the current OpenCode project, including live workspace and session names when available |
 | `/honcho:settings` | Show effective config values and config paths |
 | `/honcho:config` | Edit shared Honcho fields in `~/.honcho/config.json` |
+| `/honcho:import` | Preview or import local OpenCode transcripts (`~/.local/share/opencode/opencode.db`) into Honcho |
+
+### Importing local history
+
+OpenCode stores sessions in SQLite at `~/.local/share/opencode/opencode.db`. `/honcho:import` reads that database, maps sessions with the same `sessionStrategy` as live capture, and upload user/assistant text with original timestamps.
+
+- First call (or the TUI preview) is a dry run — it does not upload.
+- Confirming sends conversation content to Honcho. Already-imported sessions are skipped (`~/.honcho/opencode-import-state.json`).
+- After switching an existing install to `observationMode: "unified"`, import so past transcripts can be derived into the user self-collection instead of remaining only on the old directional pair.
 
 ## Agent Tools
 
