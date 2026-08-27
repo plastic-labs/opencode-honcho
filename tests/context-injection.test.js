@@ -268,13 +268,14 @@ test("system transform injects prompt-specific context for non-trivial prompt te
     expect(output.system).toHaveLength(1)
     expect(output.system[0]).toContain("The user prefers concise engineering analysis.")
     expect(output.system[0]).toContain("Prompt memory for memory-injection")
-    expect(
-      fetch.calls.some(
-        (call) =>
-          call.method === "GET" &&
-          /\/sessions\/[^/]+\/context$/.test(call.pathname) &&
-          call.search.get("search_query") === "memory-injection",
-      ),
-    ).toBe(true)
+    const targeted = fetch.calls.find(
+      (call) =>
+        call.method === "GET" &&
+        /\/sessions\/[^/]+\/context$/.test(call.pathname) &&
+        call.search.get("search_query") === "memory-injection",
+    )
+    expect(targeted).toBeDefined()
+    expect(targeted.search.get("peer_perspective")).toBe("user")
+    expect(targeted.search.get("peer_target")).toBe("user")
   })
 })

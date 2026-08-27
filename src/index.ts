@@ -1318,7 +1318,7 @@ export const createHonchoRuntimePlugin =
       }
       const sessionContext = await runtime.session.context({
         summary: true,
-        peerPerspective: runtime.agentPeer,
+        peerPerspective: userMemoryObserverPeer(runtime),
         peerTarget: runtime.userPeer,
         limitToSession: runtime.config.sessionStrategy === "per-session",
         representationOptions: {

@@ -114,7 +114,7 @@ If OpenCode is running in Docker or another remote environment, `localhost` may 
 
 ### Observation Mode
 
-Controls which Honcho collection `honcho_chat` and `honcho_create_conclusion` use for the user. This is independent of `agentObserveMe` (whether the agent peer is modeled). Changing modes does not migrate existing conclusions — use `/honcho:import` to backfill local OpenCode transcripts so Honcho can derive into the new collection.
+Controls which Honcho collection `honcho_chat`, `honcho_create_conclusion`, and targeted prompt recall use for the user. This is independent of `agentObserveMe` (whether the agent peer is modeled). Changing modes does not migrate existing conclusions — use `/honcho:import` to backfill local OpenCode transcripts so Honcho can derive into the new collection.
 
 | Mode | Collection | Best for |
 | --- | --- | --- |
