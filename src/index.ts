@@ -1666,7 +1666,6 @@ export const __testing = {
   extractSessionId,
   normalizeId,
   sessionPeerAdditions,
-  resolveUserMemoryQuery,
   resolveAgentObserveMe,
 }
 export default HonchoRuntimePlugin
