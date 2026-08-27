@@ -101,11 +101,7 @@ export const clampText = (value: string, maxChars: number) =>
 
 export const timestampToIso = (value: unknown) => {
   if (typeof value !== "number" || !Number.isFinite(value)) return undefined
-  try {
-    return new Date(value).toISOString()
-  } catch {
-    return undefined
-  }
+  return new Date(value).toISOString()
 }
 
 export const isLocalBaseUrl = (value: string) => {
@@ -132,16 +128,8 @@ export const userHomeDir = () => process.env.HOME || process.env.USERPROFILE || 
 export const sharedGlobalSettingsPath = () =>
   path.join(userHomeDir(), SHARED_SETTINGS_DIR_NAME, SHARED_SETTINGS_FILE_NAME)
 
-const trimHyphenEdges = (value: string) => {
-  let start = 0
-  let end = value.length
-  while (start < end && value[start] === "-") start += 1
-  while (end > start && value[end - 1] === "-") end -= 1
-  return value.slice(start, end)
-}
-
 export const normalizeId = (value: string) =>
-  trimHyphenEdges(value.toLowerCase().replace(/[^a-z0-9_-]+/g, "-")) || "default"
+  value.toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "") || "default"
 
 const hasProjectMarker = (directory: string) =>
   existsSync(path.join(directory, ".git")) || existsSync(path.join(directory, ".opencode"))
