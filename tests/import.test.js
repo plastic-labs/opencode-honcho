@@ -67,7 +67,7 @@ const seedOpenCodeDb = (dbPath) => {
   db.close()
 }
 
-test("import extracts user/assistant text, skips slash commands and subagent sessions", async () => {
+test("import extracts user/assistant text and skips subagent sessions", async () => {
   expect(
     extractImportMessages(
       [
@@ -77,11 +77,15 @@ test("import extracts user/assistant text, skips slash commands and subagent ses
       ],
       new Map([
         ["1", [{ data: JSON.stringify({ type: "text", text: "/honcho:status" }) }]],
-        ["2", [{ data: JSON.stringify({ type: "text", text: "The test marker is blue." }) }]],
+        ["2", [
+          { data: JSON.stringify({ type: "text", text: "ignored synthetic", ignored: true }) },
+          { data: JSON.stringify({ type: "text", text: "The test marker is blue." }) },
+        ]],
         ["3", [{ data: JSON.stringify({ type: "reasoning", text: "thinking" }) }, { data: JSON.stringify({ type: "text", text: "Got it." }) }]],
       ]),
     ),
   ).toEqual([
+    { role: "user", content: "/honcho:status", createdAt: new Date(1).toISOString() },
     { role: "user", content: "The test marker is blue.", createdAt: new Date(2).toISOString() },
     { role: "assistant", content: "Got it.", createdAt: new Date(3).toISOString() },
   ])

@@ -238,7 +238,7 @@ export const extractImportMessages = (
     const role = parsed?.role === "assistant" ? "assistant" : parsed?.role === "user" ? "user" : null
     if (!role) continue
     const content = clampText(extractTextFromParts(partsByMessage.get(message.id) || []), MAX_IMPORT_MESSAGE_CHARS)
-    if (!content || content.startsWith("/")) continue
+    if (!content) continue
     const created =
       isRecord(parsed?.time) && typeof parsed.time.created === "number" ? parsed.time.created : message.timeCreated
     out.push({ role, content, createdAt: timestampToIso(created) })

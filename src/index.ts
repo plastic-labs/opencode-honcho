@@ -234,9 +234,6 @@ const isLocalBaseUrl = (value: string) => {
 const hasConfiguredAuth = (settings: HonchoSettings) =>
   Boolean(settings.apiKey) || settings.baseUrl !== DEFAULT_SETTINGS.baseUrl
 
-const readTextPart = (part: unknown) =>
-  isRecord(part) && part.type === "text" && typeof part.text === "string" ? part.text : null
-
 const readVisibleTextPart = (part: unknown) => {
   if (!isRecord(part) || part.type !== "text" || typeof part.text !== "string") {
     return null
@@ -250,7 +247,7 @@ const readVisibleTextPart = (part: unknown) => {
 
 const extractText = (parts: unknown) =>
   Array.isArray(parts)
-    ? parts.map(readTextPart).filter((value): value is string => Boolean(value)).join("\n").trim()
+    ? parts.map(readVisibleTextPart).filter((value): value is string => Boolean(value)).join("\n").trim()
     : ""
 
 const timestampToIso = (value: unknown) => {
@@ -1427,7 +1424,7 @@ export const createHonchoRuntimePlugin =
       },
       "chat.message": async (input, output) => {
         const message = extractText(output.parts)
-        if (!message || message.startsWith("/")) {
+        if (!message) {
           return
         }
         await withRuntime(input, async (runtime) => {
