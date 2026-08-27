@@ -383,9 +383,9 @@ test("honcho_status preserves existing shared global config without mutating the
     globalOverride: true,
     workspace: "legacy-workspace",
     hosts: {
-      claude_code: {
-        workspace: "claude_code",
-        aiPeer: "claude",
+      other: {
+        workspace: "other-host",
+        aiPeer: "other-agent",
       },
     },
   }
@@ -404,9 +404,9 @@ test("honcho_status preserves existing shared global config without mutating the
     expect(status.configPath).toBe(sharedConfigPath)
     expect(status.workspace).toBe("opencode")
     expect(persisted).toEqual(initialConfig)
-    expect(persisted.hosts.claude_code).toEqual({
-      workspace: "claude_code",
-      aiPeer: "claude",
+    expect(persisted.hosts.other).toEqual({
+      workspace: "other-host",
+      aiPeer: "other-agent",
     })
     expect(persisted.hosts.opencode).toBeUndefined()
   })

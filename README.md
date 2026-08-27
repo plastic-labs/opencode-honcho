@@ -135,7 +135,7 @@ New `~/.honcho/config.json` files stamp `observationMode: "unified"`. Configs th
 
 ### Agent self-observation
 
-The root agent peer is created with `observeMe: false` by default, matching Claude Code: Honcho models the user, not the assistant. Set `agentObserveMe` to `true` if you want a peer card / representation of the agent itself.
+The root agent peer is created with `observeMe: false` by default: Honcho models the user, not the assistant. Set `agentObserveMe` to `true` if you want a peer card / representation of the agent itself.
 
 ```json
 {

@@ -89,7 +89,7 @@ export const DEFAULT_SETTINGS: HonchoSettings = {
   // Fallback when the field is omitted: keep directional so existing installs
   // do not silently switch collections. New installs stamp unified on disk.
   observationMode: "directional",
-  // Default false matches claude-honcho. Set true to opt into agent self-observation.
+  // Default false: Honcho models the user, not the assistant. Set true to opt into agent self-observation.
   agentObserveMe: false,
   sessionStrategy: "per-directory",
   // Default false for upgrades: keep the legacy user-<peerName> peer. New installs stamp true.

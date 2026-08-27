@@ -5,7 +5,7 @@ import os from "node:os"
 
 import { __testing } from "../dist/index.js"
 
-test("default session strategy matches Claude Code's per-directory behavior", () => {
+test("default session strategy is per-directory", () => {
   expect(__testing.defaultSettings.sessionStrategy).toBe("per-directory")
 })
 

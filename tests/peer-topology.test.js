@@ -20,7 +20,7 @@ test("root sessions keep user and root agent as peers", () => {
   expect(topology.describedPeers.parentAgentObserverPeer).toBeNull()
 })
 
-test("classic peer model keeps delegated sessions on the Claude-style user and ai peers", () => {
+test("classic peer model keeps delegated sessions on the user and ai peers", () => {
   const topology = __testing.buildPeerTopology({
     config: {},
     userPeerId: "user",

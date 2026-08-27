@@ -121,7 +121,6 @@ test("honcho config only exposes top-level and hosts.opencode fields", () => {
     "hosts.opencode.agentObserveMe",
     "hosts.opencode.sessionStrategy",
   ])
-  assert.equal(__testing.modeEditableFieldPaths().includes("hosts.claude_code.workspace"), false)
   assert.equal(__testing.modeEditableFieldPaths().includes("hosts.other.aiPeer"), false)
 })
 
