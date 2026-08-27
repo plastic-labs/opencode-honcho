@@ -4,14 +4,17 @@ import { mkdir, readFile, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { Database } from "bun:sqlite"
 import { Honcho } from "@honcho-ai/sdk"
-
-export type ImportSessionStrategy =
-  | "per-repo"
-  | "per-directory"
-  | "per-session"
-  | "global"
-  | "git-branch"
-  | "chat-instance"
+import {
+  SHARED_SETTINGS_DIR_NAME,
+  clampText,
+  deriveSessionScope,
+  findProjectRoot,
+  honchoSessionKey,
+  isRecord,
+  timestampToIso,
+  userHomeDir,
+  type SessionStrategy,
+} from "./core.js"
 
 export type ImportMessage = {
   role: "user" | "assistant"
@@ -66,30 +69,13 @@ const IMPORT_STATE_FILE_NAME = "opencode-import-state.json"
 const MAX_IMPORT_MESSAGE_CHARS = 25_000
 const ADD_MESSAGES_BATCH = 40
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value)
-
-const clampText = (value: string, maxChars: number) =>
-  value.length > maxChars ? `${value.slice(0, Math.max(0, maxChars - 3))}...` : value
-
-const trimHyphenEdges = (value: string) => {
-  let start = 0
-  let end = value.length
-  while (start < end && value[start] === "-") start += 1
-  while (end > start && value[end - 1] === "-") end -= 1
-  return value.slice(start, end)
-}
-
-const normalizeId = (value: string) =>
-  trimHyphenEdges(value.toLowerCase().replace(/[^a-z0-9_-]+/g, "-")) || "default"
-
 export const defaultOpenCodeDbPath = () =>
   process.env.OPENCODE_DB_PATH ||
   path.join(process.env.XDG_DATA_HOME || path.join(homedir(), ".local", "share"), "opencode", "opencode.db")
 
 export const defaultImportStatePath = () =>
   process.env.HONCHO_IMPORT_STATE_PATH ||
-  path.join(process.env.HOME || process.env.USERPROFILE || homedir(), ".honcho", IMPORT_STATE_FILE_NAME)
+  path.join(userHomeDir(), SHARED_SETTINGS_DIR_NAME, IMPORT_STATE_FILE_NAME)
 
 const importStateKey = (workspaceId: string, sessionId: string) => `${workspaceId}::${sessionId}`
 
@@ -112,66 +98,7 @@ const saveImportState = async (statePath: string, state: ImportState) => {
   await writeFile(statePath, `${JSON.stringify(state, null, 2)}\n`, "utf-8")
 }
 
-const timestampToIso = (value: unknown) => {
-  if (typeof value !== "number" || !Number.isFinite(value)) return undefined
-  try {
-    return new Date(value).toISOString()
-  } catch {
-    return undefined
-  }
-}
-
-const deriveProjectRoot = (directory: string) => {
-  let current = path.resolve(directory)
-  while (true) {
-    if (existsSync(path.join(current, ".git")) || existsSync(path.join(current, ".opencode"))) {
-      return current
-    }
-    const parent = path.dirname(current)
-    if (parent === current) break
-    current = parent
-  }
-  return path.resolve(directory)
-}
-
-const resolveGitDir = async (rootDir: string): Promise<string | null> => {
-  const directGitDir = path.join(rootDir, ".git")
-  try {
-    const statTarget = await readFile(directGitDir, "utf-8")
-    const prefix = "gitdir:"
-    if (statTarget.trim().startsWith(prefix)) {
-      return path.resolve(rootDir, statTarget.trim().slice(prefix.length).trim())
-    }
-  } catch {
-    if (existsSync(directGitDir)) return directGitDir
-  }
-  return existsSync(directGitDir) ? directGitDir : null
-}
-
-const deriveGitBranchLabel = async (rootDir: string): Promise<string | null> => {
-  const gitDir = await resolveGitDir(rootDir)
-  if (!gitDir) return null
-  try {
-    const head = (await readFile(path.join(gitDir, "HEAD"), "utf-8")).trim()
-    const branchPrefix = "ref: refs/heads/"
-    if (head.startsWith(branchPrefix)) return normalizeId(head.slice(branchPrefix.length))
-  } catch {
-    return null
-  }
-  return null
-}
-
-export const resolveImportPeerIds = (peerName: string, aiPeer: string, removeUserPrefix: boolean) => {
-  const agentPeerId = normalizeId(aiPeer || "opencode")
-  const name = peerName.trim() || "user"
-  let userPeerId = removeUserPrefix ? normalizeId(name) : normalizeId(`user:${name}`)
-  if (userPeerId === agentPeerId) {
-    userPeerId = normalizeId(`user:${name}`)
-  }
-  return { userPeerId, agentPeerId }
-}
-
-export const importedSessionKey = async ({
+const importedSessionKey = async ({
   workspaceId,
   sessionStrategy,
   directory,
@@ -179,32 +106,21 @@ export const importedSessionKey = async ({
   agentPeerId,
 }: {
   workspaceId: string
-  sessionStrategy: ImportSessionStrategy
+  sessionStrategy: SessionStrategy
   directory: string
   sessionId: string
   agentPeerId: string
 }) => {
-  const rootDir = deriveProjectRoot(directory)
-  const repoName = path.basename(rootDir)
-  let scope: string
-  if (sessionStrategy === "per-directory") {
-    const relativeDirectory = path.relative(rootDir, directory)
-    const directoryLabel =
-      relativeDirectory && !relativeDirectory.startsWith("..") && !path.isAbsolute(relativeDirectory)
-        ? normalizeId(relativeDirectory.split(path.sep).join("-"))
-        : normalizeId(path.basename(directory))
-    scope = `${workspaceId}:${directoryLabel || normalizeId(repoName)}`
-  } else if (sessionStrategy === "per-session" || sessionStrategy === "chat-instance") {
-    scope = `${workspaceId}:${normalizeId(sessionId)}`
-  } else if (sessionStrategy === "global") {
-    scope = `${workspaceId}:global`
-  } else if (sessionStrategy === "git-branch") {
-    const branchLabel = await deriveGitBranchLabel(rootDir)
-    scope = `${workspaceId}:${branchLabel || normalizeId(repoName)}`
-  } else {
-    scope = `${workspaceId}:${normalizeId(repoName)}`
-  }
-  return normalizeId(`${sessionStrategy}:${scope}:${agentPeerId}`)
+  const rootDir = findProjectRoot(directory)
+  const scope = await deriveSessionScope({
+    workspaceId,
+    sessionStrategy,
+    rootDir,
+    repoName: path.basename(rootDir),
+    currentDirectory: directory,
+    sessionId,
+  })
+  return honchoSessionKey(sessionStrategy, scope, [agentPeerId])
 }
 
 const parseMessageData = (raw: string): Record<string, unknown> | null => {
@@ -298,7 +214,7 @@ const readSessionTranscript = (dbPath: string, sessionId: string): ImportMessage
 
 export type PlanImportOptions = {
   workspaceId: string
-  sessionStrategy: ImportSessionStrategy
+  sessionStrategy: SessionStrategy
   agentPeerId: string
   dbPath?: string
   statePath?: string

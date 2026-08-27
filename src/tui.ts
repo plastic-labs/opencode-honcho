@@ -1,31 +1,31 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises"
-import { homedir } from "node:os"
 import path from "node:path"
 import type { TuiPlugin, TuiPluginModule } from "@opencode-ai/plugin/tui"
 import { Honcho } from "@honcho-ai/sdk"
-import { executeOpenCodeImport, planOpenCodeImport, resolveImportPeerIds } from "./import.js"
+import { executeOpenCodeImport, planOpenCodeImport } from "./import.js"
 import {
+  DEFAULT_SETTINGS,
+  SETTING_ENUMS,
   directionalKeepFollowUp,
-  isStampedObservationMode,
+  getNestedValue,
+  isLocalBaseUrl,
+  isObservationMode,
+  isRecord,
   needsObservationUpgradePrompt,
   observationUpgradeNotice,
+  resolveSessionPeerIds,
+  sharedGlobalSettingsPath,
   unifiedImportFollowUp,
   type ObservationMode,
-} from "./observation-upgrade.js"
+  type RecallMode,
+  type SessionStrategy,
+} from "./core.js"
 
 const PACKAGE_ID = "@honcho-ai/opencode-honcho"
-const DEFAULT_BASE_URL = "https://api.honcho.dev"
-const SHARED_SETTINGS_DIR_NAME = ".honcho"
-const SHARED_SETTINGS_FILE_NAME = "config.json"
 
-const SHARED_CONFIG_PRESETS: Record<string, readonly string[]> = {
-  recallmode: ["hybrid", "context", "tools"],
-  observationmode: ["unified", "directional"],
-  agentobserveme: ["true", "false"],
-  peermodel: ["classic", "hierarchical"],
-  sessionstrategy: ["per-repo", "per-directory", "per-session", "global", "git-branch", "chat-instance"],
-  dialecticreasoninglevel: ["minimal", "low", "medium", "high", "max"],
-}
+const SHARED_CONFIG_PRESETS: Record<string, readonly string[]> = Object.fromEntries(
+  Object.entries(SETTING_ENUMS).map(([key, values]) => [key.toLowerCase(), values]),
+)
 
 const MODE_EDITABLE_FIELD_PATHS = [
   "apiKey",
@@ -47,36 +47,17 @@ type GlobalSettings = {
     opencode?: {
       workspace?: string
       aiPeer?: string
-      recallMode?: "hybrid" | "context" | "tools"
-      observationMode?: "unified" | "directional"
+      recallMode?: RecallMode
+      observationMode?: ObservationMode
       agentObserveMe?: boolean
-      sessionStrategy?: "per-repo" | "per-directory" | "per-session" | "global" | "git-branch" | "chat-instance"
+      sessionStrategy?: SessionStrategy
       removeUserPrefix?: boolean
     }
   }
 }
 
-const globalSettingsPath = () =>
-  path.join(process.env.HOME || process.env.USERPROFILE || homedir(), SHARED_SETTINGS_DIR_NAME, SHARED_SETTINGS_FILE_NAME)
-
-const sharedConfigPath = () =>
-  path.join(process.env.HOME || process.env.USERPROFILE || homedir(), SHARED_SETTINGS_DIR_NAME, SHARED_SETTINGS_FILE_NAME)
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value)
-
-const isLocalBaseUrl = (value: string) => {
-  if (!value.trim()) return false
-  try {
-    const url = new URL(value)
-    return ["localhost", "127.0.0.1", "::1"].includes(url.hostname)
-  } catch {
-    return false
-  }
-}
-
 const readGlobalSettings = async (): Promise<GlobalSettings> => {
-  const configPath = globalSettingsPath()
+  const configPath = sharedGlobalSettingsPath()
   try {
     const raw = await readFile(configPath, "utf-8")
     const parsed = JSON.parse(raw)
@@ -90,7 +71,7 @@ const readGlobalSettings = async (): Promise<GlobalSettings> => {
 }
 
 const readSharedConfig = async (): Promise<Record<string, unknown> | null> => {
-  const configPath = sharedConfigPath()
+  const configPath = sharedGlobalSettingsPath()
   try {
     const raw = await readFile(configPath, "utf-8")
     const parsed = JSON.parse(raw)
@@ -107,7 +88,7 @@ const readSharedConfig = async (): Promise<Record<string, unknown> | null> => {
 }
 
 const writeSharedConfig = async (settings: Record<string, unknown>) => {
-  const configPath = sharedConfigPath()
+  const configPath = sharedGlobalSettingsPath()
   await mkdir(path.dirname(configPath), { recursive: true })
   await writeFile(configPath, `${JSON.stringify(settings, null, 2)}\n`, "utf-8")
   return configPath
@@ -121,12 +102,6 @@ const listSharedConfigFields = (value: Record<string, unknown>, prefix = ""): st
     }
     return [nextKey]
   })
-
-const getNestedValue = (value: Record<string, unknown>, fieldPath: string): unknown =>
-  fieldPath.split(".").reduce<unknown>((current, part) => {
-    if (!isRecord(current)) return undefined
-    return current[part]
-  }, value)
 
 const setNestedValue = (value: Record<string, unknown>, fieldPath: string, nextValue: unknown) => {
   const parts = fieldPath.split(".")
@@ -146,7 +121,7 @@ const resolveSharedConfigField = (config: Record<string, unknown>, field: string
     (candidate) => candidate.toLowerCase() === field.trim().toLowerCase(),
   )
   if (!canonical) {
-    throw new Error(`Field '${field}' does not exist in ${sharedConfigPath()}.`)
+    throw new Error(`Field '${field}' does not exist in ${sharedGlobalSettingsPath()}.`)
   }
   return canonical
 }
@@ -180,7 +155,7 @@ const parseSharedConfigValue = (currentValue: unknown, rawValue: string) => {
 }
 
 const writeGlobalSettings = async (settings: GlobalSettings) => {
-  const configPath = globalSettingsPath()
+  const configPath = sharedGlobalSettingsPath()
   await mkdir(path.dirname(configPath), { recursive: true })
   await writeFile(configPath, `${JSON.stringify(settings, null, 2)}\n`, "utf-8")
   return configPath
@@ -190,7 +165,7 @@ const normalizeSettings = (settings: GlobalSettings) => ({
   baseUrl:
     typeof settings.baseUrl === "string" && settings.baseUrl.trim()
       ? settings.baseUrl
-      : DEFAULT_BASE_URL,
+      : DEFAULT_SETTINGS.baseUrl,
   apiKey:
     typeof settings.apiKey === "string" && settings.apiKey.trim() ? settings.apiKey.trim() : "",
   peerName: typeof settings.peerName === "string" ? settings.peerName.trim() : "",
@@ -223,7 +198,7 @@ const statusMessage = (
   const configured = Boolean(normalized.apiKey) || isLocalBaseUrl(normalized.baseUrl)
   const deployment = isLocalBaseUrl(normalized.baseUrl)
     ? "Local / self-hosted"
-    : normalized.baseUrl === DEFAULT_BASE_URL
+    : normalized.baseUrl === DEFAULT_SETTINGS.baseUrl
       ? "Honcho Cloud"
       : "Custom endpoint"
   return [
@@ -234,7 +209,7 @@ const statusMessage = (
     `Peer name: ${normalized.peerName || "user"}`,
     ...(liveStatus?.workspaceName ? [`Workspace: ${liveStatus.workspaceName}`] : []),
     ...(liveStatus?.openCodeSessionId ? [`OpenCode session: ${liveStatus.openCodeSessionId}`] : []),
-    `Config path: ${globalSettingsPath()}`,
+    `Config path: ${sharedGlobalSettingsPath()}`,
     "",
     configured ? "Honcho is ready for OpenCode." : "Run /honcho:setup to finish configuration.",
     ...(configured && needsObservationUpgradePrompt(settings as Record<string, unknown>)
@@ -246,17 +221,17 @@ const statusMessage = (
 const settingsMessage = (settings: GlobalSettings) => {
   const host = settings.hosts?.opencode || {}
   return [
-    `Config path: ${globalSettingsPath()}`,
+    `Config path: ${sharedGlobalSettingsPath()}`,
     `API key: ${settings.apiKey?.trim() ? "set" : "not set"}`,
     `Peer name: ${settings.peerName?.trim() || "user"}`,
-    `Base URL: ${settings.baseUrl?.trim() || DEFAULT_BASE_URL}`,
-    `Workspace: ${host.workspace || "opencode"}`,
-    `AI peer: ${host.aiPeer || "opencode"}`,
-    `Recall mode: ${host.recallMode || "hybrid"}`,
-    `Observation mode: ${host.observationMode || "directional"}`,
+    `Base URL: ${settings.baseUrl?.trim() || DEFAULT_SETTINGS.baseUrl}`,
+    `Workspace: ${host.workspace || DEFAULT_SETTINGS.workspace}`,
+    `AI peer: ${host.aiPeer || DEFAULT_SETTINGS.aiPeer}`,
+    `Recall mode: ${host.recallMode || DEFAULT_SETTINGS.recallMode}`,
+    `Observation mode: ${host.observationMode || DEFAULT_SETTINGS.observationMode}`,
     `Agent observe me: ${host.agentObserveMe === true ? "true" : "false"}`,
-    `Session strategy: ${host.sessionStrategy || "per-directory"}`,
-    ...(!isStampedObservationMode(settings.hosts?.opencode?.observationMode) && settings.hosts?.opencode
+    `Session strategy: ${host.sessionStrategy || DEFAULT_SETTINGS.sessionStrategy}`,
+    ...(!isObservationMode(settings.hosts?.opencode?.observationMode) && settings.hosts?.opencode
       ? ["", observationUpgradeNotice()]
       : []),
   ].join("\n")
@@ -354,10 +329,10 @@ const saveSettings = async (partial: Partial<GlobalSettings>) => {
   const currentOpenCodeHost = isRecord(currentHosts.opencode) ? currentHosts.opencode : {}
   currentHosts.opencode = {
     ...currentOpenCodeHost,
-    workspace: partialHost?.workspace ?? current.hosts?.opencode?.workspace ?? "opencode",
-    aiPeer: partialHost?.aiPeer ?? current.hosts?.opencode?.aiPeer ?? "opencode",
-    recallMode: partialHost?.recallMode ?? current.hosts?.opencode?.recallMode ?? "hybrid",
-    sessionStrategy: partialHost?.sessionStrategy ?? current.hosts?.opencode?.sessionStrategy ?? "per-directory",
+    workspace: partialHost?.workspace ?? current.hosts?.opencode?.workspace ?? DEFAULT_SETTINGS.workspace,
+    aiPeer: partialHost?.aiPeer ?? current.hosts?.opencode?.aiPeer ?? DEFAULT_SETTINGS.aiPeer,
+    recallMode: partialHost?.recallMode ?? current.hosts?.opencode?.recallMode ?? DEFAULT_SETTINGS.recallMode,
+    sessionStrategy: partialHost?.sessionStrategy ?? current.hosts?.opencode?.sessionStrategy ?? DEFAULT_SETTINGS.sessionStrategy,
   }
 
   const next: GlobalSettings & Record<string, unknown> = {
@@ -367,7 +342,7 @@ const saveSettings = async (partial: Partial<GlobalSettings>) => {
         ? partial.baseUrl
         : typeof current.baseUrl === "string"
           ? current.baseUrl
-          : DEFAULT_BASE_URL,
+          : DEFAULT_SETTINGS.baseUrl,
     peerName: nextPeerName,
     hosts: currentHosts,
   }
@@ -402,20 +377,20 @@ const openSettingsDialog = async (api: Parameters<TuiPlugin>[0]) => {
 
 const importConfigFromSettings = (settings: GlobalSettings) => {
   const host = settings.hosts?.opencode || {}
-  const workspaceId = (host.workspace || "opencode").trim() || "opencode"
-  const aiPeer = host.aiPeer || "opencode"
-  const { userPeerId, agentPeerId } = resolveImportPeerIds(
+  const workspaceId = (host.workspace || DEFAULT_SETTINGS.workspace).trim() || DEFAULT_SETTINGS.workspace
+  const aiPeer = host.aiPeer || DEFAULT_SETTINGS.aiPeer
+  const { userPeerId, agentPeerId } = resolveSessionPeerIds(
     settings.peerName || "user",
     aiPeer,
     host.removeUserPrefix === true,
   )
   return {
     apiKey: settings.apiKey || "",
-    baseUrl: settings.baseUrl || DEFAULT_BASE_URL,
+    baseUrl: settings.baseUrl || DEFAULT_SETTINGS.baseUrl,
     workspaceId,
     userPeerId,
     agentPeerId,
-    sessionStrategy: host.sessionStrategy || "per-directory",
+    sessionStrategy: host.sessionStrategy || DEFAULT_SETTINGS.sessionStrategy,
     agentObserveMe: host.agentObserveMe === true,
   }
 }
@@ -621,9 +596,9 @@ const openCloudApiKeyPrompt = (api: Parameters<TuiPlugin>[0]) => {
           api,
           {
             apiKey: apiKey.trim(),
-            baseUrl: DEFAULT_BASE_URL,
+            baseUrl: DEFAULT_SETTINGS.baseUrl,
           },
-          [`Base URL: ${DEFAULT_BASE_URL}`, `API key: ${apiKey.trim() ? "set" : "not set"}`],
+          [`Base URL: ${DEFAULT_SETTINGS.baseUrl}`, `API key: ${apiKey.trim() ? "set" : "not set"}`],
         )
       },
       onCancel: () => api.ui.dialog.clear(),
@@ -722,7 +697,7 @@ const openModeDialog = async (api: Parameters<TuiPlugin>[0]) => {
     api.ui.dialog.replace(() =>
       api.ui.DialogAlert({
         title: "Honcho config missing",
-        message: `The config does not exist at ${sharedConfigPath()}.`,
+        message: `The config does not exist at ${sharedGlobalSettingsPath()}.`,
       }),
     )
     return
@@ -733,7 +708,7 @@ const openModeDialog = async (api: Parameters<TuiPlugin>[0]) => {
     api.ui.dialog.replace(() =>
       api.ui.DialogAlert({
         title: "Honcho config empty",
-        message: `No editable fields were found in ${sharedConfigPath()}.`,
+        message: `No editable fields were found in ${sharedGlobalSettingsPath()}.`,
       }),
     )
     return
@@ -861,7 +836,7 @@ export const __testing = {
   resolveSharedConfigField,
   saveSettings,
   settingsMessage,
-  sharedConfigPath,
+  sharedConfigPath: sharedGlobalSettingsPath,
   sharedConfigPresetOptions,
   statusMessage,
   validateCloudApiKey,

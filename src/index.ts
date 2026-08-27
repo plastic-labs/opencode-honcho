@@ -1,19 +1,31 @@
-import { existsSync } from "node:fs"
 import { mkdir, readFile, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { tool, type Plugin, type PluginInput } from "@opencode-ai/plugin"
 import { Honcho } from "@honcho-ai/sdk"
 import {
+  DEFAULT_SETTINGS,
+  clampText,
+  deriveSessionScope,
+  deriveUserPeerId as deriveUserPeerIdFromName,
+  getNestedValue,
+  honchoSessionKey,
+  isLocalBaseUrl,
+  isRecord,
   needsObservationUpgradePrompt,
+  normalizeId,
   observationUpgradeNextSteps,
   observationUpgradeNotice,
+  resolveSessionPeerIds,
+  SETTING_ENUMS,
+  sharedGlobalSettingsPath,
   stampedHostObservationMode,
+  timestampToIso,
   unifiedImportFollowUp,
-} from "./observation-upgrade.js"
+  walkToProjectRoot,
+  type HonchoSettings,
+  type ObservationMode,
+} from "./core.js"
 
-type RecallMode = "hybrid" | "context" | "tools"
-type ObservationMode = "unified" | "directional"
-type SessionStrategy = "per-repo" | "per-directory" | "per-session" | "global" | "git-branch" | "chat-instance"
 type DialecticReasoningLevel = "minimal" | "low" | "medium" | "high" | "max"
 type ContextRefreshSettings = {
   messageThreshold: number
@@ -24,19 +36,6 @@ type ContextRefreshSettings = {
 
 export type RuntimePluginOptions = {
   configPath?: string
-}
-
-type HonchoSettings = {
-  apiKey: string
-  baseUrl: string
-  peerName: string
-  aiPeer: string
-  workspace: string
-  recallMode: RecallMode
-  observationMode: ObservationMode
-  agentObserveMe: boolean
-  sessionStrategy: SessionStrategy
-  removeUserPrefix: boolean
 }
 
 type HostScopedSettings = Partial<
@@ -109,32 +108,9 @@ type PeerTopology = {
   }
 }
 
-const SETTINGS_DIR_NAME = ".opencode"
-const SHARED_SETTINGS_DIR_NAME = ".honcho"
-const SHARED_SETTINGS_FILE_NAME = "config.json"
 const LEGACY_API_KEY_FIELD = "apiKey"
 const RUNTIME_SERVICE = "opencode-honcho"
 const MAX_RECENT_CONCLUSIONS = 8
-
-const DEFAULT_SETTINGS: HonchoSettings = {
-  apiKey: "",
-  baseUrl: "https://api.honcho.dev",
-  peerName: "",
-  aiPeer: "opencode",
-  workspace: "opencode",
-  recallMode: "hybrid",
-  // Fallback for configs that predate this field: keep directional so existing
-  // installs do not silently switch collections. New installs stamp unified.
-  observationMode: "directional",
-  // Default false matches claude-honcho: do not spend deriver work on a model of
-  // the assistant. Set true to opt into agent self-observation / peer card.
-  agentObserveMe: false,
-  sessionStrategy: "per-directory",
-  // Default false for everyone, including upgrading installs: an existing user
-  // keeps their `user-<peerName>` peer and its memory. New installs are stamped
-  // true at config creation, and anyone can opt in by setting it true.
-  removeUserPrefix: false,
-}
 
 const INTERNAL_DIALECTIC_REASONING_LEVEL: DialecticReasoningLevel = "low"
 const INTERNAL_DIALECTIC_MAX_CHARS = 600
@@ -149,11 +125,9 @@ const INTERNAL_CONTEXT_REFRESH: ContextRefreshSettings = {
 
 const BOOLEAN_KEYS = new Set<keyof HonchoSettings>(["removeUserPrefix", "agentObserveMe"])
 
-const ENUM_KEYS: Record<string, ReadonlySet<string>> = {
-  recallMode: new Set(["hybrid", "context", "tools"]),
-  observationMode: new Set(["unified", "directional"]),
-  sessionStrategy: new Set(["per-repo", "per-directory", "per-session", "global", "git-branch", "chat-instance"]),
-}
+const ENUM_KEYS: Record<string, ReadonlySet<string>> = Object.fromEntries(
+  Object.entries(SETTING_ENUMS).map(([key, values]) => [key, new Set(values)]),
+)
 
 const INHERITABLE_STRING_KEYS = new Set<keyof HonchoSettings>(["apiKey", "baseUrl", "peerName", "aiPeer", "workspace"])
 
@@ -197,39 +171,8 @@ const TRIVIAL_PROMPT_PATTERNS = [
 const TECH_TERM_PATTERN =
   /\b(react|vue|svelte|angular|fastapi|django|flask|postgres|redis|docker|kubernetes|bun|node|typescript|python|rust|go|graphql|rest|api|auth|oauth|jwt|stripe|webhook)\b/gi
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value)
-
 const expandEnv = (value: string) =>
   value.replace(/\$\{([^}]+)\}/g, (_, key: string) => process.env[key] ?? "")
-
-const clampText = (value: string, maxChars: number) =>
-  value.length > maxChars ? `${value.slice(0, Math.max(0, maxChars - 3))}...` : value
-
-const trimHyphenEdges = (value: string) => {
-  let start = 0
-  let end = value.length
-  while (start < end && value[start] === "-") {
-    start += 1
-  }
-  while (end > start && value[end - 1] === "-") {
-    end -= 1
-  }
-  return value.slice(start, end)
-}
-
-const normalizeId = (value: string) =>
-  trimHyphenEdges(value.toLowerCase().replace(/[^a-z0-9_-]+/g, "-")) || "default"
-
-const isLocalBaseUrl = (value: string) => {
-  if (!value.trim()) return false
-  try {
-    const url = new URL(value)
-    return ["localhost", "127.0.0.1", "::1"].includes(url.hostname)
-  } catch {
-    return false
-  }
-}
 
 const hasConfiguredAuth = (settings: HonchoSettings) =>
   Boolean(settings.apiKey) || settings.baseUrl !== DEFAULT_SETTINGS.baseUrl
@@ -249,18 +192,6 @@ const extractText = (parts: unknown) =>
   Array.isArray(parts)
     ? parts.map(readVisibleTextPart).filter((value): value is string => Boolean(value)).join("\n").trim()
     : ""
-
-const timestampToIso = (value: unknown) => {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return undefined
-  }
-
-  try {
-    return new Date(value).toISOString()
-  } catch {
-    return undefined
-  }
-}
 
 const upsertAssistantMessagePart = (
   state: Map<string, { sessionID: string; parts: Map<string, string> }>,
@@ -565,12 +496,6 @@ const parseSettingField = (field: string) => {
   return field
 }
 
-const lookupField = (payload: Record<string, unknown>, field: string) =>
-  field.split(".").reduce<unknown>((current, part) => {
-    if (!isRecord(current)) return undefined
-    return current[part]
-  }, payload)
-
 const extractSessionId = (input: Record<string, unknown> | undefined) => {
   const event = isRecord(input?.event) ? input.event : undefined
   const eventProperties = isRecord(event?.properties) ? event.properties : undefined
@@ -591,29 +516,14 @@ const deriveProjectRoot = (pluginInput: PluginInput) => {
     (value): value is string => Boolean(value),
   )
   for (const hint of hints) {
-    let current = path.resolve(hint)
-    while (true) {
-      if (existsSync(path.join(current, SETTINGS_DIR_NAME)) || existsSync(path.join(current, ".git"))) {
-        return current
-      }
-      const parent = path.dirname(current)
-      if (parent === current) {
-        break
-      }
-      current = parent
-    }
+    const root = walkToProjectRoot(hint)
+    if (root) return root
   }
   return path.resolve(pluginInput.worktree || pluginInput.project?.worktree || pluginInput.directory || process.cwd())
 }
 
 const sharedConfigPath = (configPathOverride?: string) =>
   configPathOverride ? path.resolve(configPathOverride) : sharedGlobalSettingsPath()
-
-const userHomeDir = () => process.env.HOME || process.env.USERPROFILE || process.cwd()
-
-const sharedGlobalSettingsPath = () => {
-  return path.join(userHomeDir(), SHARED_SETTINGS_DIR_NAME, SHARED_SETTINGS_FILE_NAME)
-}
 
 const readJsonFile = async (configPath: string) => {
   try {
@@ -656,13 +566,8 @@ const writeSettings = async (
 
 const currentUserName = () => "user"
 
-const deriveUserPeerId = (settings: Pick<HonchoSettings, "peerName" | "removeUserPrefix">) => {
-  const name = settings.peerName || currentUserName()
-  // removeUserPrefix=true drops the `user-` prefix to match the sibling
-  // claude-honcho / hermes-honcho plugins; false (the legacy-safe default)
-  // keeps the historical `user-<name>` peer and its accumulated memory.
-  return settings.removeUserPrefix ? normalizeId(name) : normalizeId(`user:${name}`)
-}
+const deriveUserPeerId = (settings: Pick<HonchoSettings, "peerName" | "removeUserPrefix">) =>
+  deriveUserPeerIdFromName(settings.peerName || currentUserName(), Boolean(settings.removeUserPrefix))
 
 const assertDistinctUserAndAgentPeers = (userPeerId: string, rootAgentPeerId: string) => {
   if (userPeerId === rootAgentPeerId) {
@@ -678,8 +583,8 @@ const rootApiKey = (raw: Record<string, unknown>) => {
 }
 
 const hostDefaults = (settings: HonchoSettings): Record<string, unknown> => {
-  const workspace = typeof settings.workspace === "string" && settings.workspace.trim() ? settings.workspace : "opencode"
-  const aiPeer = typeof settings.aiPeer === "string" && settings.aiPeer.trim() ? settings.aiPeer : "opencode"
+  const workspace = typeof settings.workspace === "string" && settings.workspace.trim() ? settings.workspace : DEFAULT_SETTINGS.workspace
+  const aiPeer = typeof settings.aiPeer === "string" && settings.aiPeer.trim() ? settings.aiPeer : DEFAULT_SETTINGS.aiPeer
   return {
     workspace,
     aiPeer,
@@ -734,81 +639,6 @@ const ensureSharedGlobalSettings = async (configPath = sharedGlobalSettingsPath(
   }
 }
 
-const resolveGitDir = async (rootDir: string): Promise<string | null> => {
-  const directGitDir = path.join(rootDir, ".git")
-  try {
-    const statTarget = await readFile(directGitDir, "utf-8")
-    const prefix = "gitdir:"
-    if (statTarget.trim().startsWith(prefix)) {
-      const relativeGitDir = statTarget.trim().slice(prefix.length).trim()
-      return path.resolve(rootDir, relativeGitDir)
-    }
-  } catch {
-    if (existsSync(directGitDir)) {
-      return directGitDir
-    }
-  }
-
-  return existsSync(directGitDir) ? directGitDir : null
-}
-
-const deriveGitBranchLabel = async (rootDir: string): Promise<string | null> => {
-  const gitDir = await resolveGitDir(rootDir)
-  if (!gitDir) return null
-
-  try {
-    const head = (await readFile(path.join(gitDir, "HEAD"), "utf-8")).trim()
-    const branchPrefix = "ref: refs/heads/"
-    if (head.startsWith(branchPrefix)) {
-      return normalizeId(head.slice(branchPrefix.length))
-    }
-  } catch {
-    return null
-  }
-
-  return null
-}
-
-const deriveSessionScope = async ({
-  workspaceId,
-  sessionStrategy,
-  rootDir,
-  repoName,
-  currentDirectory,
-  sessionId,
-}: {
-  workspaceId: string
-  sessionStrategy: SessionStrategy
-  rootDir: string
-  repoName: string
-  currentDirectory: string
-  sessionId: string
-}) => {
-  if (sessionStrategy === "per-directory") {
-    const relativeDirectory = path.relative(rootDir, currentDirectory)
-    const directoryLabel =
-      relativeDirectory && !relativeDirectory.startsWith("..") && !path.isAbsolute(relativeDirectory)
-        ? normalizeId(relativeDirectory.split(path.sep).join("-"))
-        : normalizeId(path.basename(currentDirectory))
-    return `${workspaceId}:${directoryLabel || normalizeId(repoName)}`
-  }
-
-  if (sessionStrategy === "per-session" || sessionStrategy === "chat-instance") {
-    return `${workspaceId}:${normalizeId(sessionId)}`
-  }
-
-  if (sessionStrategy === "global") {
-    return `${workspaceId}:global`
-  }
-
-  if (sessionStrategy === "git-branch") {
-    const branchLabel = await deriveGitBranchLabel(rootDir)
-    return `${workspaceId}:${branchLabel || normalizeId(repoName)}`
-  }
-
-  return `${workspaceId}:${normalizeId(repoName)}`
-}
-
 const deriveRuntimeHandle = async (
   pluginInput: PluginInput,
   input: Record<string, unknown> | undefined,
@@ -818,16 +648,12 @@ const deriveRuntimeHandle = async (
   const { configPath, globalConfigPath, settings } = await resolveSettings(configPathOverride)
   const sessionId = extractSessionId(input)
   const repoName = path.basename(rootDir)
-  const workspaceId = normalizeId(settings.workspace || "opencode")
-  const rootAgentPeerId = normalizeId(settings.aiPeer || "opencode")
-  // If the bare form collides with the agent peer (peerName === aiPeer), fall back
-  // to the prefixed form to keep user and agent memory distinct, rather than
-  // throwing on this hot path (deriveRuntimeHandle runs in unguarded hooks).
-  // assertDistinct only fires for a genuinely unresolvable config.
-  let userPeerId = deriveUserPeerId(settings)
-  if (userPeerId === rootAgentPeerId) {
-    userPeerId = normalizeId(`user:${settings.peerName || currentUserName()}`)
-  }
+  const workspaceId = normalizeId(settings.workspace || DEFAULT_SETTINGS.workspace)
+  const { userPeerId, agentPeerId: rootAgentPeerId } = resolveSessionPeerIds(
+    settings.peerName || currentUserName(),
+    settings.aiPeer || DEFAULT_SETTINGS.aiPeer,
+    Boolean(settings.removeUserPrefix),
+  )
   assertDistinctUserAndAgentPeers(userPeerId, rootAgentPeerId)
   const activeAgentPeerId = rootAgentPeerId
   const childAgentPeerId = null
@@ -855,7 +681,7 @@ const deriveRuntimeHandle = async (
     config: settings,
     workspaceId,
     sessionId,
-    sessionKey: normalizeId(`${settings.sessionStrategy}:${sessionScope}:${lineage.join(":")}`),
+    sessionKey: honchoSessionKey(settings.sessionStrategy, sessionScope, lineage),
     userPeerId,
     rootAgentPeerId,
     activeAgentPeerId,
@@ -1530,7 +1356,7 @@ export const createHonchoRuntimePlugin =
           async execute(args, context) {
             const status = await runtimeStatus({ ...args, sessionID: context.sessionID })
             if (args.field) {
-              return JSON.stringify({ field: args.field, value: lookupField(status, args.field) }, null, 2)
+              return JSON.stringify({ field: args.field, value: getNestedValue(status, args.field) }, null, 2)
             }
             return JSON.stringify(status, null, 2)
           },
