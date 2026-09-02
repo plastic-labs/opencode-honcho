@@ -41,7 +41,14 @@ export type RuntimePluginOptions = {
 type HostScopedSettings = Partial<
   Pick<
     HonchoSettings,
-    "workspace" | "aiPeer" | "recallMode" | "observationMode" | "agentObserveMe" | "sessionStrategy" | "removeUserPrefix"
+    | "apiKey"
+    | "workspace"
+    | "aiPeer"
+    | "recallMode"
+    | "observationMode"
+    | "agentObserveMe"
+    | "sessionStrategy"
+    | "removeUserPrefix"
   >
 >
 
@@ -343,7 +350,6 @@ const hostScopedSettings = (value: unknown): HostScopedSettings | null => {
     return null
   }
   const normalized = normalizedRawSettings(value)
-  delete normalized[LEGACY_API_KEY_FIELD]
   delete normalized.peerName
   delete normalized.linkedHosts
   delete normalized.baseUrl
@@ -1400,8 +1406,8 @@ export const createHonchoRuntimePlugin =
               }
 
               if (shouldPersistGlobal) {
-                if (effectiveApiKey) {
-                  nextGlobal[LEGACY_API_KEY_FIELD] = effectiveApiKey
+                if (providedApiKey) {
+                  nextGlobal[LEGACY_API_KEY_FIELD] = providedApiKey
                   persistedFields.push(LEGACY_API_KEY_FIELD)
                 }
                 nextGlobal.peerName = effectivePeerName

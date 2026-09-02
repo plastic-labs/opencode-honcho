@@ -81,7 +81,8 @@ OpenCode reads and writes this shared config file directly. OpenCode-specific de
       "observationMode": "unified", // new installs; existing configs without this field stay directional
       "agentObserveMe": false, // true opts into self-observation on the root agent peer
       "sessionStrategy": "per-directory",
-      "removeUserPrefix": true // true uses the bare peerName; false (default on upgrade) keeps the legacy user-<peerName> peer
+      "removeUserPrefix": true, // true uses the bare peerName; false (default on upgrade) keeps the legacy user-<peerName> peer
+      "apiKey": "hch-..." // optional; overrides the root apiKey for this host
     }
   }
 }
