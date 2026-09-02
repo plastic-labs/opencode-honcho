@@ -248,46 +248,50 @@ const persistHostObservationMode = async (mode: ObservationMode) => {
 
 const observationUpgradeOptions = () => [
   {
-    title: "Keep directional",
-    value: "directional",
-    description: "Current behavior: this OpenCode agent keeps its own view of you",
-  },
-  {
     title: "Switch to unified",
     value: "unified",
-    description: "New default: shared self-collection. You can then /honcho:import to backfill local chats",
+    description: "shared self-collection",
+  },
+  {
+    title: "Keep directional",
+    value: "directional",
+    description: "split memory between agents",
   },
 ]
 
 const openObservationUpgradeDialog = (
   api: Parameters<TuiPlugin>[0],
   followUpLines: string[],
-  title = "Honcho observation mode",
+  title = "New: Honcho observation mode!",
 ) => {
+  const persistThenAlert = async (mode: ObservationMode) => {
+    const configPath = await persistHostObservationMode(mode)
+    const extra = mode === "unified" ? unifiedImportFollowUp() : directionalKeepFollowUp()
+    api.ui.dialog.replace(() =>
+      api.ui.DialogAlert({
+        title: mode === "unified" ? "Switched to unified" : "Keeping directional",
+        message: [
+          ...followUpLines,
+          followUpLines.length > 0 ? "" : null,
+          `Saved observationMode=${mode} to ${configPath}`,
+          extra,
+        ]
+          .filter((line): line is string => typeof line === "string")
+          .join("\n"),
+      }),
+    )
+  }
+
   api.ui.dialog.replace(() =>
-    api.ui.DialogSelect({
+    api.ui.DialogConfirm({
       title,
-      flat: true,
-      options: observationUpgradeOptions(),
-      onSelect: (option) => {
-        void (async () => {
-          const mode: ObservationMode = option.value === "unified" ? "unified" : "directional"
-          const configPath = await persistHostObservationMode(mode)
-          const extra = mode === "unified" ? unifiedImportFollowUp() : directionalKeepFollowUp()
-          api.ui.dialog.replace(() =>
-            api.ui.DialogAlert({
-              title: mode === "unified" ? "Switched to unified" : "Keeping directional",
-              message: [
-                ...followUpLines,
-                followUpLines.length > 0 ? "" : null,
-                `Saved observationMode=${mode} to ${configPath}`,
-                extra,
-              ]
-                .filter((line): line is string => typeof line === "string")
-                .join("\n"),
-            }),
-          )
-        })()
+      message:
+        "Unified: one self-collection, you can share with other unified agents (new default). Directional: keeps Honcho memory specific to your OpenCode agent.\n\nConfirm = unified. Cancel = keep directional.",
+      onConfirm: () => {
+        void persistThenAlert("unified")
+      },
+      onCancel: () => {
+        void persistThenAlert("directional")
       },
     }),
   )
@@ -299,11 +303,7 @@ const maybePromptObservationUpgrade = async (api: Parameters<TuiPlugin>[0]) => {
     const configured = Boolean(settings.apiKey?.trim()) || isLocalBaseUrl(settings.baseUrl || "")
     const raw = await readSharedConfig()
     if (!configured || !needsObservationUpgradePrompt(raw)) return
-    openObservationUpgradeDialog(
-      api,
-      [],
-      "Keep directional memory, or switch to unified?",
-    )
+    openObservationUpgradeDialog(api, [])
   } catch {
     return
   }
@@ -397,7 +397,7 @@ const importConfigFromSettings = (settings: GlobalSettings) => {
 
 const formatImportPreview = (plan: Awaited<ReturnType<typeof planOpenCodeImport>>) => {
   const lines = [
-    `Database: ${plan.dbPath}`,
+    `Source: ${plan.source}`,
     `Window: last ${plan.days} days`,
     `Ready to import: ${plan.sessionCount} session(s), ${plan.messageCount} message(s)`,
     `Already imported: ${plan.alreadyImportedCount}`,
@@ -428,6 +428,7 @@ const openImportDialog = async (api: Parameters<TuiPlugin>[0]) => {
   let plan: Awaited<ReturnType<typeof planOpenCodeImport>>
   try {
     plan = await planOpenCodeImport({
+      client: api.client,
       workspaceId: config.workspaceId,
       sessionStrategy: config.sessionStrategy,
       agentPeerId: config.agentPeerId,
@@ -479,6 +480,7 @@ const openImportDialog = async (api: Parameters<TuiPlugin>[0]) => {
               workspaceId: config.workspaceId,
             })
             const result = await executeOpenCodeImport({
+              client: api.client,
               workspaceId: config.workspaceId,
               sessionStrategy: config.sessionStrategy,
               agentPeerId: config.agentPeerId,
@@ -529,7 +531,7 @@ const openSetupConfirmation = async (
         const settings = await readGlobalSettings()
         const configured = Boolean(settings.apiKey?.trim()) || isLocalBaseUrl(settings.baseUrl || "")
         if (configured && needsObservationUpgradePrompt(raw)) {
-          openObservationUpgradeDialog(api, summary, "Keep directional memory, or switch to unified?")
+          openObservationUpgradeDialog(api, summary)
           return
         }
         api.ui.dialog.replace(() =>
@@ -656,7 +658,7 @@ const openModeValueDialog = async (
     api.ui.dialog.replace(() =>
       api.ui.DialogSelect({
         title: fieldPath.endsWith("observationMode")
-          ? "Keep directional memory, or switch to unified?"
+          ? "Honcho observation mode"
           : `What should it be set to: ${presetOptions.join(", ")}`,
         flat: true,
         options: selectOptions,
@@ -818,7 +820,7 @@ const buildCommands = (api: Parameters<TuiPlugin>[0]) => [
 ]
 
 const tui: TuiPlugin = async (api) => {
-  api.command.register(() => buildCommands(api))
+  api.command?.register(() => buildCommands(api))
   void maybePromptObservationUpgrade(api)
 }
 

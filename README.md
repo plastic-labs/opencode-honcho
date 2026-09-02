@@ -81,7 +81,8 @@ OpenCode reads and writes this shared config file directly. OpenCode-specific de
       "observationMode": "unified", // new installs; existing configs without this field stay directional
       "agentObserveMe": false, // true opts into self-observation on the root agent peer
       "sessionStrategy": "per-directory",
-      "removeUserPrefix": true // true uses the bare peerName; false (default on upgrade) keeps the legacy user-<peerName> peer
+      "removeUserPrefix": true, // true uses the bare peerName; false (default on upgrade) keeps the legacy user-<peerName> peer
+      "apiKey": "hch-..." // optional; overrides the root apiKey for this host
     }
   }
 }
@@ -135,7 +136,7 @@ New `~/.honcho/config.json` files stamp `observationMode: "unified"`. Configs th
 
 ### Agent self-observation
 
-The root agent peer is created with `observeMe: false` by default, matching Claude Code: Honcho models the user, not the assistant. Set `agentObserveMe` to `true` if you want a peer card / representation of the agent itself.
+The root agent peer is created with `observeMe: false` by default: Honcho models the user, not the assistant. Set `agentObserveMe` to `true` if you want a peer card / representation of the agent itself.
 
 ```json
 {
@@ -155,11 +156,11 @@ The root agent peer is created with `observeMe: false` by default, matching Clau
 | `/honcho:status` | Show effective Honcho status for the current OpenCode project, including live workspace and session names when available |
 | `/honcho:settings` | Show effective config values and config paths |
 | `/honcho:config` | Edit shared Honcho fields in `~/.honcho/config.json` |
-| `/honcho:import` | Preview or import local OpenCode transcripts (`~/.local/share/opencode/opencode.db`) into Honcho |
+| `/honcho:import` | Preview or import your local OpenCode session history into Honcho |
 
 ### Importing local history
 
-OpenCode stores sessions in SQLite at `~/.local/share/opencode/opencode.db`. `/honcho:import` reads that database, maps sessions with the same `sessionStrategy` as live capture, and upload user/assistant text with original timestamps.
+`/honcho:import` reads session history through the OpenCode SDK client that the plugin receives, maps sessions with the same `sessionStrategy` as live capture, and uploads user/assistant text with original timestamps.
 
 - First call (or the TUI preview) is a dry run — it does not upload.
 - Confirming sends conversation content to Honcho. Already-imported sessions are skipped (`~/.honcho/opencode-import-state.json`).

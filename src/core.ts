@@ -50,12 +50,10 @@ export const needsObservationUpgradePrompt = (raw: Record<string, unknown> | nul
 }
 
 export const observationUpgradeNotice = () =>
-  [
-    "Observation mode is unset, so this install is still directional (this OpenCode agent's view of you).",
-    "New installs use unified (your self-collection, shared with other unified agents).",
-    "Choose with /honcho:setup or /honcho:config (hosts.opencode.observationMode).",
-    "If you switch to unified, you can run /honcho:import to reingest local OpenCode transcripts into the new collection.",
-  ].join(" ")
+  `Observation mode is unset, so this install is still directional (this OpenCode agent's view of you).
+New installs use unified (your self-collection, shared with other unified agents).
+Choose with /honcho:setup or /honcho:config (hosts.opencode.observationMode).
+If you switch to unified, you can run /honcho:import to reingest local OpenCode transcripts into the new collection.`
 
 export const observationUpgradeNextSteps = () =>
   "Ask the user whether to keep directional or switch to unified. Persist the choice with honcho_set_config field=observationMode. If they choose unified, mention they can run /honcho:import to backfill local OpenCode history — optional, not required."
@@ -89,7 +87,7 @@ export const DEFAULT_SETTINGS: HonchoSettings = {
   // Fallback when the field is omitted: keep directional so existing installs
   // do not silently switch collections. New installs stamp unified on disk.
   observationMode: "directional",
-  // Default false matches claude-honcho. Set true to opt into agent self-observation.
+  // Default false: Honcho models the user, not the assistant. Set true to opt into agent self-observation.
   agentObserveMe: false,
   sessionStrategy: "per-directory",
   // Default false for upgrades: keep the legacy user-<peerName> peer. New installs stamp true.

@@ -264,3 +264,22 @@ test("bare peer colliding with the agent peer falls back to the prefix", async (
     expect(result.peers.userPeer.id).toBe("user-opencode")
   })
 })
+
+test("hosts.opencode.apiKey is used when the root apiKey is absent", async () => {
+  const rootDir = await mkdtemp(path.join(os.tmpdir(), "honcho-host-key-root-"))
+  const homeDir = await mkdtemp(path.join(os.tmpdir(), "honcho-host-key-home-"))
+  await mkdir(path.join(homeDir, ".honcho"), { recursive: true })
+  const cfg = path.join(homeDir, ".honcho", "config.json")
+
+  await withEnv({ HOME: homeDir, USER: "ignored-user", XDG_CONFIG_HOME: undefined, HONCHO_API_KEY: undefined }, async () => {
+    await writeFile(cfg, JSON.stringify({
+      peerName: "alice",
+      baseUrl: "http://127.0.0.1:8000",
+      hosts: { opencode: { workspace: "opencode", aiPeer: "opencode", apiKey: "host-opencode-jwt" } },
+    }))
+    const hooks = await createPluginHarness(rootDir)
+    const env = { env: {} }
+    await hooks["shell.env"]({}, env)
+    expect(env.env.HONCHO_API_KEY).toBe("host-opencode-jwt")
+  })
+})
