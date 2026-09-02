@@ -397,7 +397,7 @@ const importConfigFromSettings = (settings: GlobalSettings) => {
 
 const formatImportPreview = (plan: Awaited<ReturnType<typeof planOpenCodeImport>>) => {
   const lines = [
-    `Database: ${plan.dbPath}`,
+    `Source: ${plan.source}`,
     `Window: last ${plan.days} days`,
     `Ready to import: ${plan.sessionCount} session(s), ${plan.messageCount} message(s)`,
     `Already imported: ${plan.alreadyImportedCount}`,
@@ -428,6 +428,7 @@ const openImportDialog = async (api: Parameters<TuiPlugin>[0]) => {
   let plan: Awaited<ReturnType<typeof planOpenCodeImport>>
   try {
     plan = await planOpenCodeImport({
+      client: api.client,
       workspaceId: config.workspaceId,
       sessionStrategy: config.sessionStrategy,
       agentPeerId: config.agentPeerId,
@@ -479,6 +480,7 @@ const openImportDialog = async (api: Parameters<TuiPlugin>[0]) => {
               workspaceId: config.workspaceId,
             })
             const result = await executeOpenCodeImport({
+              client: api.client,
               workspaceId: config.workspaceId,
               sessionStrategy: config.sessionStrategy,
               agentPeerId: config.agentPeerId,
@@ -818,7 +820,7 @@ const buildCommands = (api: Parameters<TuiPlugin>[0]) => [
 ]
 
 const tui: TuiPlugin = async (api) => {
-  api.command.register(() => buildCommands(api))
+  api.command?.register(() => buildCommands(api))
   void maybePromptObservationUpgrade(api)
 }
 

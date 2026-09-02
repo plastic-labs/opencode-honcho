@@ -1,8 +1,6 @@
-import { existsSync } from "node:fs"
-import { homedir } from "node:os"
 import { mkdir, readFile, writeFile } from "node:fs/promises"
 import path from "node:path"
-import { Database } from "bun:sqlite"
+import type { TuiPlugin } from "@opencode-ai/plugin/tui"
 import { Honcho } from "@honcho-ai/sdk"
 import {
   SHARED_SETTINGS_DIR_NAME,
@@ -16,19 +14,17 @@ import {
   type SessionStrategy,
 } from "./core.js"
 
+export type OpenCodeClient = Parameters<TuiPlugin>[0]["client"]
+type SessionListResult = Awaited<ReturnType<OpenCodeClient["session"]["list"]>>
+type MessagesResult = Awaited<ReturnType<OpenCodeClient["session"]["messages"]>>
+export type OpenCodeSession = NonNullable<SessionListResult["data"]>[number]
+export type OpenCodeMessagePage = NonNullable<MessagesResult["data"]>
+export type OpenCodePart = OpenCodeMessagePage[number]["parts"][number]
+
 export type ImportMessage = {
   role: "user" | "assistant"
   content: string
   createdAt?: string
-}
-
-export type OpenCodeSessionRow = {
-  id: string
-  directory: string
-  title: string
-  parentId: string | null
-  timeCreated: number
-  timeUpdated: number
 }
 
 export type PlannedImportSession = {
@@ -45,7 +41,7 @@ export type PlannedImportSession = {
 
 export type ImportPlan = {
   ok: true
-  dbPath: string
+  source: string
   days: number
   sessionCount: number
   messageCount: number
@@ -66,12 +62,10 @@ type ImportState = {
 }
 
 const IMPORT_STATE_FILE_NAME = "opencode-import-state.json"
+const IMPORT_SOURCE = "opencode-sdk"
 const MAX_IMPORT_MESSAGE_CHARS = 25_000
 const ADD_MESSAGES_BATCH = 40
-
-export const defaultOpenCodeDbPath = () =>
-  process.env.OPENCODE_DB_PATH ||
-  path.join(process.env.XDG_DATA_HOME || path.join(homedir(), ".local", "share"), "opencode", "opencode.db")
+const SESSION_LIST_LIMIT = 10_000
 
 export const defaultImportStatePath = () =>
   process.env.HONCHO_IMPORT_STATE_PATH ||
@@ -123,100 +117,86 @@ const importedSessionKey = async ({
   return honchoSessionKey(sessionStrategy, scope, [agentPeerId])
 }
 
-const parseMessageData = (raw: string): Record<string, unknown> | null => {
-  try {
-    const parsed = JSON.parse(raw)
-    return isRecord(parsed) ? parsed : null
-  } catch {
-    return null
+const unwrap = <T>(result: { data?: T; error?: unknown }, what: string): T => {
+  if (result.error !== undefined || result.data === undefined) {
+    const detail =
+      result.error instanceof Error
+        ? result.error.message
+        : result.error === undefined
+          ? "empty response"
+          : JSON.stringify(result.error)
+    throw new Error(`OpenCode ${what} failed: ${detail}`)
   }
+  return result.data
 }
 
-const extractTextFromParts = (parts: Array<{ data: string }>) => {
+const extractTextFromParts = (parts: OpenCodePart[]) => {
   const texts: string[] = []
   for (const part of parts) {
-    const parsed = parseMessageData(part.data)
-    if (!parsed || parsed.type !== "text" || typeof parsed.text !== "string") continue
-    if (parsed.ignored === true) continue
-    const text = parsed.text.trim()
+    if (part.type !== "text" || part.ignored === true) continue
+    const text = part.text.trim()
     if (text) texts.push(text)
   }
   return texts.join("\n").trim()
 }
 
-export const extractImportMessages = (
-  messages: Array<{ id: string; timeCreated: number; data: string }>,
-  partsByMessage: Map<string, Array<{ data: string }>>,
-): ImportMessage[] => {
+const extractImportMessages = (page: OpenCodeMessagePage): ImportMessage[] => {
   const out: ImportMessage[] = []
-  for (const message of messages) {
-    const parsed = parseMessageData(message.data)
-    const role = parsed?.role === "assistant" ? "assistant" : parsed?.role === "user" ? "user" : null
-    if (!role) continue
-    const content = clampText(extractTextFromParts(partsByMessage.get(message.id) || []), MAX_IMPORT_MESSAGE_CHARS)
+  for (const { info, parts } of page) {
+    const content = clampText(extractTextFromParts(parts), MAX_IMPORT_MESSAGE_CHARS)
     if (!content) continue
-    const created =
-      isRecord(parsed?.time) && typeof parsed.time.created === "number" ? parsed.time.created : message.timeCreated
-    out.push({ role, content, createdAt: timestampToIso(created) })
+    out.push({ role: info.role, content, createdAt: timestampToIso(info.time.created) })
   }
   return out
 }
 
-const readSessionsFromDb = (dbPath: string, days: number, includeSubagents: boolean): OpenCodeSessionRow[] => {
-  const db = new Database(dbPath, { readonly: true })
-  try {
-    const cutoff = Date.now() - days * 24 * 60 * 60 * 1000
-    const rows = db
-      .query(
-        `SELECT id, directory, title, parent_id AS parentId, time_created AS timeCreated, time_updated AS timeUpdated
-         FROM session
-         WHERE time_updated >= ?
-         ORDER BY time_updated DESC`,
-      )
-      .all(cutoff) as Array<{
-      id: string
-      directory: string
-      title: string
-      parentId: string | null
-      timeCreated: number
-      timeUpdated: number
-    }>
-    return rows.filter((row) => includeSubagents || !row.parentId)
-  } finally {
-    db.close()
+const listOpenCodeSessions = async (
+  client: OpenCodeClient,
+  days: number,
+  includeSubagents: boolean,
+): Promise<OpenCodeSession[]> => {
+  // session.list is scoped to one project (chosen by `directory`), so walk every
+  // known project and ask for all of its sessions regardless of sub-directory.
+  const projects = unwrap(await client.project.list(), "project.list")
+  const start = Date.now() - days * 24 * 60 * 60 * 1000
+  const seen = new Set<string>()
+  const sessions: OpenCodeSession[] = []
+  for (const project of projects) {
+    const page = unwrap(
+      await client.session.list({
+        directory: project.worktree,
+        scope: "project",
+        start,
+        roots: !includeSubagents,
+        limit: SESSION_LIST_LIMIT,
+      }),
+      `session.list(${project.worktree})`,
+    )
+    for (const session of page) {
+      if (seen.has(session.id)) continue
+      seen.add(session.id)
+      sessions.push(session)
+    }
   }
+  return sessions.sort((left, right) => right.time.updated - left.time.updated)
 }
 
-const readSessionTranscript = (dbPath: string, sessionId: string): ImportMessage[] => {
-  const db = new Database(dbPath, { readonly: true })
-  try {
-    const messages = db
-      .query(
-        `SELECT id, time_created AS timeCreated, data FROM message WHERE session_id = ? ORDER BY time_created, id`,
-      )
-      .all(sessionId) as Array<{ id: string; timeCreated: number; data: string }>
-    const parts = db
-      .query(
-        `SELECT message_id AS messageId, data FROM part WHERE session_id = ? ORDER BY time_created, id`,
-      )
-      .all(sessionId) as Array<{ messageId: string; data: string }>
-    const partsByMessage = new Map<string, Array<{ data: string }>>()
-    for (const part of parts) {
-      const list = partsByMessage.get(part.messageId) || []
-      list.push({ data: part.data })
-      partsByMessage.set(part.messageId, list)
-    }
-    return extractImportMessages(messages, partsByMessage)
-  } finally {
-    db.close()
-  }
+const readSessionTranscript = async (client: OpenCodeClient, sessionID: string): Promise<ImportMessage[]> => {
+  // Without `limit` the server pages through the whole transcript itself and
+  // returns it oldest-first. `before` is an opaque cursor only exposed via a
+  // Link header, so client-side paging is not worth it.
+  const page = unwrap(await client.session.messages({ sessionID }), `session.messages(${sessionID})`)
+  const ordered = [...page].sort(
+    (left, right) => left.info.time.created - right.info.time.created || left.info.id.localeCompare(right.info.id),
+  )
+  return extractImportMessages(ordered)
 }
 
 export type PlanImportOptions = {
+  client: OpenCodeClient
   workspaceId: string
   sessionStrategy: SessionStrategy
   agentPeerId: string
-  dbPath?: string
   statePath?: string
   days?: number
   includeSubagents?: boolean
@@ -225,20 +205,16 @@ export type PlanImportOptions = {
 }
 
 export const planOpenCodeImport = async (options: PlanImportOptions): Promise<ImportPlan> => {
-  const dbPath = options.dbPath || defaultOpenCodeDbPath()
   const statePath = options.statePath || defaultImportStatePath()
   const days = options.days && options.days > 0 ? options.days : 30
-  if (!existsSync(dbPath)) {
-    throw new Error(`OpenCode database not found at ${dbPath}`)
-  }
 
   const state = await loadImportState(statePath)
-  const rows = readSessionsFromDb(dbPath, days, options.includeSubagents === true)
+  const rows = await listOpenCodeSessions(options.client, days, options.includeSubagents === true)
   const sessions: PlannedImportSession[] = []
 
   for (const row of rows) {
-    const messages = readSessionTranscript(dbPath, row.id)
-    const alreadyImported = state.imported[importStateKey(options.workspaceId, row.id)] === row.timeUpdated
+    const messages = await readSessionTranscript(options.client, row.id)
+    const alreadyImported = state.imported[importStateKey(options.workspaceId, row.id)] === row.time.updated
     const skippedReason =
       messages.length === 0 ? "no text messages" : alreadyImported && !options.force ? "already imported" : undefined
     sessions.push({
@@ -252,7 +228,7 @@ export const planOpenCodeImport = async (options: PlanImportOptions): Promise<Im
         sessionId: row.id,
         agentPeerId: options.agentPeerId,
       }),
-      timeUpdated: row.timeUpdated,
+      timeUpdated: row.time.updated,
       messageCount: messages.length,
       alreadyImported,
       skippedReason,
@@ -263,7 +239,7 @@ export const planOpenCodeImport = async (options: PlanImportOptions): Promise<Im
   const uploadable = sessions.filter((session) => !session.skippedReason)
   return {
     ok: true,
-    dbPath,
+    source: IMPORT_SOURCE,
     days,
     sessionCount: uploadable.length,
     messageCount: uploadable.reduce((sum, session) => sum + session.messageCount, 0),
@@ -318,7 +294,7 @@ export const executeOpenCodeImport = async (options: ExecuteImportOptions): Prom
           createdAt: message.createdAt,
           metadata: {
             backfill: true,
-            source: "opencode.db",
+            source: IMPORT_SOURCE,
             openCodeSessionId: sessionPlan.id,
           },
         })

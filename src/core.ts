@@ -50,12 +50,10 @@ export const needsObservationUpgradePrompt = (raw: Record<string, unknown> | nul
 }
 
 export const observationUpgradeNotice = () =>
-  [
-    "Observation mode is unset, so this install is still directional (this OpenCode agent's view of you).",
-    "New installs use unified (your self-collection, shared with other unified agents).",
-    "Choose with /honcho:setup or /honcho:config (hosts.opencode.observationMode).",
-    "If you switch to unified, you can run /honcho:import to reingest local OpenCode transcripts into the new collection.",
-  ].join(" ")
+  `Observation mode is unset, so this install is still directional (this OpenCode agent's view of you).
+New installs use unified (your self-collection, shared with other unified agents).
+Choose with /honcho:setup or /honcho:config (hosts.opencode.observationMode).
+If you switch to unified, you can run /honcho:import to reingest local OpenCode transcripts into the new collection.`
 
 export const observationUpgradeNextSteps = () =>
   "Ask the user whether to keep directional or switch to unified. Persist the choice with honcho_set_config field=observationMode. If they choose unified, mention they can run /honcho:import to backfill local OpenCode history — optional, not required."
