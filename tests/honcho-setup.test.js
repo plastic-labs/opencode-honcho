@@ -372,7 +372,7 @@ test("honcho_status lets exported HONCHO_* values override ~/.honcho/config.json
   )
 })
 
-test("honcho_status preserves existing shared global config without mutating the file", async () => {
+test("honcho_status honors a root workspace as the shared default and preserves the file", async () => {
   const rootDir = await mkdtemp(path.join(os.tmpdir(), "honcho-existing-global-config-"))
   const homeDir = await mkdtemp(path.join(os.tmpdir(), "honcho-home-existing-global-"))
   const sharedConfigDir = path.join(homeDir, ".honcho")
@@ -402,7 +402,8 @@ test("honcho_status preserves existing shared global config without mutating the
     const persisted = JSON.parse(await readFile(sharedConfigPath, "utf-8"))
 
     expect(status.configPath).toBe(sharedConfigPath)
-    expect(status.workspace).toBe("opencode")
+    // Shared-runtime resolution: hosts.opencode.workspace > root workspace > "opencode".
+    expect(status.workspace).toBe("legacy-workspace")
     expect(persisted).toEqual(initialConfig)
     expect(persisted.hosts.other).toEqual({
       workspace: "other-host",
@@ -488,7 +489,6 @@ test("honcho_set_config rejects removed and deprecated config fields", async () 
 
     for (const field of [
       "dialecticReasoningLevel",
-      "enabled",
       "peerModel",
       "writeFrequency",
       "globalOverride",

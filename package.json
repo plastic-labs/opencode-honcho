@@ -37,6 +37,7 @@
     "prepublishOnly": "bun run build"
   },
   "dependencies": {
+    "@honcho-ai/harness-plugin-core": "^0.1.0",
     "@honcho-ai/sdk": "^2.1.1",
     "@opencode-ai/plugin": "^1.18.23"
   },

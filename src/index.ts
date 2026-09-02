@@ -1,7 +1,17 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { tool, type Plugin, type PluginInput } from "@opencode-ai/plugin"
-import { Honcho } from "@honcho-ai/sdk"
+import type { Honcho } from "@honcho-ai/sdk"
+import { resolveConfig } from "@honcho-ai/harness-plugin-core"
+import {
+  HARNESS_RUNTIME_VERSION,
+  HOST_ID,
+  PLUGIN_VERSION,
+  createHonchoClient,
+  createHonchoClientCache,
+  telemetryIdentity,
+  type HonchoClientOptions,
+} from "./honcho-client.js"
 import {
   DEFAULT_SETTINGS,
   clampText,
@@ -49,6 +59,8 @@ type HostScopedSettings = Partial<
     | "agentObserveMe"
     | "sessionStrategy"
     | "removeUserPrefix"
+    | "timeoutMs"
+    | "enabled"
   >
 >
 
@@ -57,6 +69,8 @@ type RuntimeHandle = {
   configPath: string
   globalConfigPath: string
   config: HonchoSettings
+  /** Non-fatal notes from the shared config resolver (e.g. unset ${VAR}, env shadowing a file key). */
+  configWarnings: string[]
   workspaceId: string
   sessionId: string
   sessionKey: string
@@ -130,7 +144,8 @@ const INTERNAL_CONTEXT_REFRESH: ContextRefreshSettings = {
   useSessionStartDialectic: true,
 }
 
-const BOOLEAN_KEYS = new Set<keyof HonchoSettings>(["removeUserPrefix", "agentObserveMe"])
+const BOOLEAN_KEYS = new Set<keyof HonchoSettings>(["removeUserPrefix", "agentObserveMe", "enabled"])
+const NUMBER_KEYS = new Set<keyof HonchoSettings>(["timeoutMs"])
 
 const ENUM_KEYS: Record<string, ReadonlySet<string>> = Object.fromEntries(
   Object.entries(SETTING_ENUMS).map(([key, values]) => [key, new Set(values)]),
@@ -147,6 +162,8 @@ const HOST_SETTING_FIELDS = new Set<keyof HonchoSettings>([
   "agentObserveMe",
   "sessionStrategy",
   "removeUserPrefix",
+  "timeoutMs",
+  "enabled",
 ])
 
 const SETTING_FIELD_PATHS = new Set([
@@ -160,6 +177,8 @@ const SETTING_FIELD_PATHS = new Set([
   "agentObserveMe",
   "sessionStrategy",
   "removeUserPrefix",
+  "timeoutMs",
+  "enabled",
 ])
 
 const DURABLE_PATTERNS = [
@@ -183,6 +202,17 @@ const expandEnv = (value: string) =>
 
 const hasConfiguredAuth = (settings: HonchoSettings) =>
   Boolean(settings.apiKey) || settings.baseUrl !== DEFAULT_SETTINGS.baseUrl
+
+// `enabled` is the shared-runtime kill switch (root or hosts.opencode, or HONCHO_ENABLED=false).
+// Disabled means inert: no capture, no injection, no memory tools. Config tools keep working.
+const isRuntimeEnabled = (settings: Pick<HonchoSettings, "enabled">) => settings.enabled !== false
+
+const DISABLED_MESSAGE = "Honcho is disabled for OpenCode (enabled=false). Re-enable with /honcho:config or honcho_set_config field=enabled value=true."
+
+const parsePositiveNumber = (value: unknown) => {
+  const parsed = typeof value === "number" ? value : typeof value === "string" ? Number(value.trim()) : Number.NaN
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null
+}
 
 const readVisibleTextPart = (part: unknown) => {
   if (!isRecord(part) || part.type !== "text" || typeof part.text !== "string") {
@@ -285,6 +315,13 @@ const parseSettingValue = (fieldPath: string, raw: string): unknown => {
   if (BOOLEAN_KEYS.has(fieldPath as keyof HonchoSettings)) {
     return coerceBoolean(raw)
   }
+  if (NUMBER_KEYS.has(fieldPath as keyof HonchoSettings)) {
+    const parsed = parsePositiveNumber(raw)
+    if (parsed === null) {
+      throw new Error(`Expected a positive number for ${fieldPath}, received ${JSON.stringify(raw)}`)
+    }
+    return parsed
+  }
   if (fieldPath in ENUM_KEYS && !ENUM_KEYS[fieldPath].has(raw)) {
     throw new Error(`Unsupported ${fieldPath} value '${raw}'`)
   }
@@ -320,6 +357,13 @@ const applyRawLayer = (target: HonchoSettings, raw: Record<string, unknown>) => 
       // true, so a stray "false" can't be truthy and silently flip the prefix.
       ;(target as Record<string, unknown>)[key] =
         value === true || (typeof value === "string" && value.trim().toLowerCase() === "true")
+      continue
+    }
+    if (NUMBER_KEYS.has(key)) {
+      const parsed = parsePositiveNumber(value)
+      if (parsed !== null) {
+        ;(target as Record<string, unknown>)[key] = parsed
+      }
       continue
     }
     if (key in ENUM_KEYS) {
@@ -544,21 +588,40 @@ const readJsonFile = async (configPath: string) => {
 
 const readConfigFile = async (configPath: string) => normalizedRawSettings((await readJsonFile(configPath)) ?? {})
 
+// Only the OpenCode-specific env override lives here. HONCHO_API_KEY, HONCHO_URL /
+// HONCHO_BASE_URL, HONCHO_WORKSPACE(_ID), HONCHO_PEER_NAME, HONCHO_TIMEOUT_MS and
+// HONCHO_ENABLED are applied by the shared runtime's resolveConfig.
 const envSettings = (): Record<string, unknown> => ({
-  apiKey: process.env.HONCHO_API_KEY || "",
-  baseUrl: process.env.HONCHO_URL || process.env.HONCHO_BASE_URL || "",
-  peerName: process.env.HONCHO_PEER_NAME || "",
-  workspace: process.env.HONCHO_WORKSPACE || process.env.HONCHO_WORKSPACE_ID || "",
   aiPeer: process.env.HONCHO_AI_PEER || "",
 })
 
+/**
+ * Two layers, one file:
+ * - identity + connection + kill switch (peerName, workspace, baseUrl, timeoutMs, auth, enabled)
+ *   come from @honcho-ai/harness-plugin-core, which owns env precedence, `${VAR}` interpolation,
+ *   baseUrl normalization, and v0 → v1 key migration (environmentUrl, workspaceId, top-level apiKey).
+ * - OpenCode-only host keys (aiPeer, recallMode, observationMode, agentObserveMe, sessionStrategy,
+ *   removeUserPrefix) are read from hosts.opencode by this plugin.
+ */
 const resolveSettings = async (configPathOverride?: string) => {
   const configPath = sharedConfigPath(configPathOverride)
-  const { globalConfigPath, globalRaw } = await ensureSharedGlobalSettings(configPath)
+  const { globalConfigPath, globalRaw, rawFile } = await ensureSharedGlobalSettings(configPath)
+  const shared = resolveConfig(rawFile, { host: HOST_ID })
+  const hostSettings = mergeSettings(normalizeScopedSettings(globalRaw), envSettings())
+  const settings: HonchoSettings = {
+    ...hostSettings,
+    apiKey: shared.apiKey ?? "",
+    baseUrl: shared.baseUrl,
+    peerName: shared.peerName,
+    workspace: shared.workspace,
+    timeoutMs: shared.timeoutMs,
+    enabled: shared.enabled,
+  }
   return {
     configPath,
     globalConfigPath,
-    settings: mergeSettings(normalizeScopedSettings(globalRaw), envSettings()),
+    settings,
+    configWarnings: shared.warnings,
   }
 }
 
@@ -642,6 +705,7 @@ const ensureSharedGlobalSettings = async (configPath = sharedGlobalSettingsPath(
   return {
     globalConfigPath: configPath,
     globalRaw: normalizedRawSettings(next),
+    rawFile: next,
   }
 }
 
@@ -651,7 +715,7 @@ const deriveRuntimeHandle = async (
   configPathOverride?: string,
 ): Promise<RuntimeHandle> => {
   const rootDir = deriveProjectRoot(pluginInput)
-  const { configPath, globalConfigPath, settings } = await resolveSettings(configPathOverride)
+  const { configPath, globalConfigPath, settings, configWarnings } = await resolveSettings(configPathOverride)
   const sessionId = extractSessionId(input)
   const repoName = path.basename(rootDir)
   const workspaceId = normalizeId(settings.workspace || DEFAULT_SETTINGS.workspace)
@@ -685,6 +749,7 @@ const deriveRuntimeHandle = async (
     configPath,
     globalConfigPath,
     config: settings,
+    configWarnings,
     workspaceId,
     sessionId,
     sessionKey: honchoSessionKey(settings.sessionStrategy, sessionScope, lineage),
@@ -758,16 +823,25 @@ const buildPeerTopology = (handle: Pick<
 const sessionPeerAdditions = (topology: PeerTopology) =>
   Object.entries(topology.sessionPeerConfigs).map(([peerId, config]) => [peerId, config] as const)
 
+type RuntimeClientFactory = {
+  clientFor: (options: HonchoClientOptions) => Honcho
+  /** Agent completion model for this OpenCode session, if a hook has reported one. */
+  modelFor: (sessionId: string) => string | undefined
+}
+
 const createActiveRuntime = async (
   pluginInput: PluginInput,
   input: Record<string, unknown> | undefined,
+  factory: RuntimeClientFactory,
   configPathOverride?: string,
 ): Promise<ActiveRuntime> => {
   const handle = await deriveRuntimeHandle(pluginInput, input, configPathOverride)
-  const honcho = new Honcho({
-    apiKey: handle.config.apiKey || undefined,
-    baseURL: handle.config.baseUrl || undefined,
+  const honcho = factory.clientFor({
+    apiKey: handle.config.apiKey,
+    baseUrl: handle.config.baseUrl,
     workspaceId: handle.workspaceId,
+    timeoutMs: handle.config.timeoutMs,
+    model: factory.modelFor(handle.sessionId),
   })
   const userPeer = await honcho.peer(handle.userPeerId, {
     configuration: { observeMe: true },
@@ -780,21 +854,16 @@ const createActiveRuntime = async (
   return { ...handle, honcho, session, userPeer, agentPeer }
 }
 
-const validateSetupConnection = async ({
-  apiKey,
-  baseUrl,
-  workspaceId,
-}: {
-  apiKey: string
-  baseUrl: string
-  workspaceId: string
-}) => {
-  const honcho = new Honcho({
-    apiKey: apiKey || undefined,
-    baseURL: baseUrl || undefined,
-    workspaceId,
-  })
-  await honcho.session(normalizeId(`setup-check:${workspaceId}`))
+const validateSetupConnection = async (options: HonchoClientOptions) => {
+  const honcho = createHonchoClient(options)
+  await honcho.session(normalizeId(`setup-check:${options.workspaceId}`))
+}
+
+const extractModelId = (input: Record<string, unknown> | undefined) => {
+  const model = isRecord(input?.model) ? input.model : null
+  if (!model) return null
+  const id = typeof model.modelID === "string" ? model.modelID : typeof model.id === "string" ? model.id : ""
+  return id.trim() || null
 }
 
 const durableConclusionCandidate = (text: string, settings: HonchoSettings) => {
@@ -929,6 +998,24 @@ export const createHonchoRuntimePlugin =
   ({ configPath }: RuntimePluginOptions = {}): Plugin =>
   async (pluginInput) => {
     const sessionStates = new Map<string, SessionState>()
+    const clients = createHonchoClientCache()
+    // OpenCode session id → agent model id, reported by chat hooks. Sent as X-Honcho-Agent-Model.
+    const sessionModels = new Map<string, string>()
+
+    const rememberSessionModel = (input: Record<string, unknown> | undefined) => {
+      const modelId = extractModelId(input)
+      if (modelId) {
+        sessionModels.set(extractSessionId(input), modelId)
+      }
+    }
+
+    const activateRuntime = (input: Record<string, unknown> | undefined) =>
+      createActiveRuntime(
+        pluginInput,
+        input,
+        { clientFor: clients.get, modelFor: (sessionId) => sessionModels.get(sessionId) },
+        configPath,
+      )
 
     const getState = (stateKey: string) => {
       let current = sessionStates.get(stateKey)
@@ -956,6 +1043,12 @@ export const createHonchoRuntimePlugin =
       fallback: T,
     ) => {
       const handle = await deriveRuntimeHandle(pluginInput, input, configPath)
+      if (!isRuntimeEnabled(handle.config)) {
+        if (isRecord(fallback) && typeof fallback.error === "string") {
+          return { ...fallback, error: DISABLED_MESSAGE } as T
+        }
+        return fallback
+      }
       if (!hasConfiguredAuth(handle.config)) {
         await log("warn", "Honcho runtime is missing an API key and is not configured for a localhost baseUrl.", {
           configPath: handle.configPath,
@@ -966,7 +1059,7 @@ export const createHonchoRuntimePlugin =
         return fallback
       }
       try {
-        return await action(await createActiveRuntime(pluginInput, input, configPath))
+        return await action(await activateRuntime(input))
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error)
         await log("error", "Honcho runtime operation failed.", {
@@ -1015,8 +1108,15 @@ export const createHonchoRuntimePlugin =
         peerName: handle.config.peerName,
         removeUserPrefix: handle.config.removeUserPrefix,
         configured: hasConfiguredAuth(handle.config),
+        enabled: isRuntimeEnabled(handle.config),
         localMode: isLocalBaseUrl(handle.config.baseUrl),
         baseUrl: handle.config.baseUrl,
+        timeoutMs: handle.config.timeoutMs,
+        configWarnings: handle.configWarnings,
+        telemetry: {
+          ...telemetryIdentity({ model: sessionModels.get(handle.sessionId) }),
+          runtimeVersion: HARNESS_RUNTIME_VERSION,
+        },
         peers: describePeers(handle),
         recentConclusions: state.recentConclusions,
         stableContext: state.stableContext,
@@ -1248,6 +1348,9 @@ export const createHonchoRuntimePlugin =
       },
       "shell.env": async (input, output) => {
         const handle = await deriveRuntimeHandle(pluginInput, input, configPath)
+        if (!isRuntimeEnabled(handle.config)) {
+          return
+        }
         if (handle.config.apiKey) {
           output.env.HONCHO_API_KEY = handle.config.apiKey
         }
@@ -1255,6 +1358,7 @@ export const createHonchoRuntimePlugin =
         output.env.HONCHO_WORKSPACE_ID = handle.workspaceId
       },
       "chat.message": async (input, output) => {
+        rememberSessionModel(input)
         const message = extractText(output.parts)
         if (!message) {
           return
@@ -1273,8 +1377,9 @@ export const createHonchoRuntimePlugin =
         }, undefined)
       },
       "experimental.chat.system.transform": async (input, output) => {
+        rememberSessionModel(input)
         const handle = await deriveRuntimeHandle(pluginInput, input, configPath)
-        if (handle.config.recallMode === "tools" || !hasConfiguredAuth(handle.config)) {
+        if (!isRuntimeEnabled(handle.config) || handle.config.recallMode === "tools" || !hasConfiguredAuth(handle.config)) {
           return
         }
         const query = extractPromptQuery(input)
@@ -1322,6 +1427,9 @@ export const createHonchoRuntimePlugin =
       },
       "experimental.session.compacting": async (input, output) => {
         const handle = await deriveRuntimeHandle(pluginInput, input, configPath)
+        if (!isRuntimeEnabled(handle.config)) {
+          return
+        }
         const state = getState(deriveSessionStateKey(handle))
         const topology = buildPeerTopology(handle)
         const rootAgent = topology.describedPeers.rootAgentPeer
@@ -1402,6 +1510,7 @@ export const createHonchoRuntimePlugin =
                   apiKey: effectiveApiKey,
                   baseUrl: effectiveBaseUrl,
                   workspaceId: handle.workspaceId,
+                  timeoutMs: handle.config.timeoutMs,
                 })
               }
 
@@ -1602,11 +1711,13 @@ export const createHonchoRuntimePlugin =
           args: { content: tool.schema.string() },
           async execute(args, context) {
             const handle = await deriveRuntimeHandle(pluginInput, { ...args, sessionID: context.sessionID }, configPath)
-            if (!hasConfiguredAuth(handle.config)) {
+            if (!isRuntimeEnabled(handle.config) || !hasConfiguredAuth(handle.config)) {
               return JSON.stringify(
                 {
                   ok: false,
-                  error: "Honcho is not configured with an API key or localhost baseUrl.",
+                  error: isRuntimeEnabled(handle.config)
+                    ? "Honcho is not configured with an API key or localhost baseUrl."
+                    : DISABLED_MESSAGE,
                   workspace: handle.workspaceId,
                   sessionKey: handle.sessionKey,
                 },
@@ -1616,7 +1727,7 @@ export const createHonchoRuntimePlugin =
             }
 
             try {
-              const runtime = await createActiveRuntime(pluginInput, { ...args, sessionID: context.sessionID }, configPath)
+              const runtime = await activateRuntime({ ...args, sessionID: context.sessionID })
               const content = clampText(args.content.trim(), INTERNAL_DIALECTIC_MAX_CHARS)
               const created = await maybeWriteConclusion(runtime, content, "tool.create_conclusion")
               return JSON.stringify(
@@ -1673,5 +1784,10 @@ export const __testing = {
   normalizeId,
   sessionPeerAdditions,
   resolveAgentObserveMe,
+  extractModelId,
+  isRuntimeEnabled,
+  hostId: HOST_ID,
+  pluginVersion: PLUGIN_VERSION,
+  harnessRuntimeVersion: HARNESS_RUNTIME_VERSION,
 }
 export default HonchoRuntimePlugin

@@ -6,6 +6,26 @@ import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises"
 
 import tuiModule, { __testing } from "../dist/tui.js"
 
+// Identity/connection now resolve through @honcho-ai/harness-plugin-core, which applies
+// HONCHO_* env precedence and falls back to $USER for peerName. Pin those for tests.
+const withEnv = (entries, action) => {
+  const previous = new Map()
+  for (const [key, value] of Object.entries(entries)) {
+    previous.set(key, process.env[key])
+    if (value === undefined) delete process.env[key]
+    else process.env[key] = value
+  }
+  try {
+    return action()
+  } finally {
+    for (const [key, value] of previous.entries()) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+  }
+}
+const NO_SHARED_ENV = { HONCHO_API_KEY: undefined, HONCHO_URL: undefined, HONCHO_BASE_URL: undefined, USER: undefined, USERNAME: undefined }
+
 test("tui exports testing helpers for cloud api key validation", () => {
   assert.equal(tuiModule.id, "@honcho-ai/opencode-honcho")
   assert.match(__testing.validateCloudApiKey(""), /requires a Honcho API key/i)
@@ -13,14 +33,31 @@ test("tui exports testing helpers for cloud api key validation", () => {
 })
 
 test("status message still reports cloud mode without a key as not configured", () => {
-  const message = __testing.statusMessage({
-    apiKey: "",
-    baseUrl: "https://api.honcho.dev",
-  })
+  withEnv(NO_SHARED_ENV, () => {
+    const message = __testing.statusMessage({
+      apiKey: "",
+      baseUrl: "https://api.honcho.dev",
+    })
 
-  assert.match(message, /Configured: no/)
-  assert.match(message, /Peer name: user/)
-  assert.match(message, /Run \/honcho:setup to finish configuration\./)
+    assert.match(message, /Configured: no/)
+    assert.match(message, /Peer name: user/)
+    assert.match(message, /Run \/honcho:setup to finish configuration\./)
+  })
+})
+
+test("status message reports the shared kill switch and timeout", () => {
+  withEnv(NO_SHARED_ENV, () => {
+    const message = __testing.statusMessage({
+      apiKey: "key",
+      baseUrl: "https://api.honcho.dev",
+      timeoutMs: 12000,
+      hosts: { opencode: { enabled: false } },
+    })
+
+    assert.match(message, /Enabled: no/)
+    assert.match(message, /Timeout: 12000 ms/)
+    assert.match(message, /Honcho is disabled for OpenCode/)
+  })
 })
 
 test("status message reads the root baseUrl", () => {
