@@ -335,7 +335,7 @@ test("every Honcho request carries host, plugin, runtime, and current agent mode
         expect(call.headers.get("X-Honcho-Host")).toBe("opencode")
         expect(call.headers.get("X-Honcho-Plugin")).toBe(expectedPlugin)
         expect(call.headers.get("X-Honcho-Runtime")).toBe(expectedRuntime)
-        expect(call.headers.get("X-Honcho-Agent-Model")).toBe("claude-sonnet-4-5")
+        expect(call.headers.get("X-Honcho-Agent-Model")).toBe("anthropic/claude-sonnet-4-5")
       }
 
       // Model changes mid-session are pushed onto the cached client (setTelemetryHeaders).
@@ -347,14 +347,14 @@ test("every Honcho request carries host, plugin, runtime, and current agent mode
       const later = fetch.calls.slice(before)
       expect(later.length).toBeGreaterThan(0)
       for (const call of later) {
-        expect(call.headers.get("X-Honcho-Agent-Model")).toBe("claude-opus-4")
+        expect(call.headers.get("X-Honcho-Agent-Model")).toBe("anthropic/claude-opus-4")
       }
 
       const status = await statusOf(hooks, rootDir)
       expect(status.telemetry).toEqual({
         host: "opencode",
         pluginVersion: expectedPlugin,
-        model: "claude-opus-4",
+        model: "anthropic/claude-opus-4",
         runtimeVersion: expectedRuntime,
       })
     }),

@@ -859,11 +859,15 @@ const validateSetupConnection = async (options: HonchoClientOptions) => {
   await honcho.session(normalizeId(`setup-check:${options.workspaceId}`))
 }
 
+// `providerID/modelID` (e.g. `openrouter/anthropic/claude-sonnet-4-5`): the bare model id is
+// ambiguous across providers, and OpenCode reports both on every chat hook.
 const extractModelId = (input: Record<string, unknown> | undefined) => {
   const model = isRecord(input?.model) ? input.model : null
   if (!model) return null
-  const id = typeof model.modelID === "string" ? model.modelID : typeof model.id === "string" ? model.id : ""
-  return id.trim() || null
+  const id = (typeof model.modelID === "string" ? model.modelID : typeof model.id === "string" ? model.id : "").trim()
+  if (!id) return null
+  const provider = typeof model.providerID === "string" ? model.providerID.trim() : ""
+  return provider ? `${provider}/${id}` : id
 }
 
 const durableConclusionCandidate = (text: string, settings: HonchoSettings) => {
