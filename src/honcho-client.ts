@@ -23,10 +23,6 @@ export type HonchoClientOptions = TelemetryOverrides & {
   timeoutMs: number
 }
 
-/**
- * Identity every request carries: host and plugin, plus whatever the caller knows.
- * Platform is filled in by harness-plugin-core (`process.platform`).
- */
 export const telemetryIdentity = (overrides: TelemetryOverrides = {}): TelemetryIdentity => ({
   host: HOST_ID,
   plugin: PLUGIN_ID,
@@ -51,10 +47,7 @@ export const updateClientTelemetry = (honcho: Honcho, overrides: TelemetryOverri
 const clientKey = (options: HonchoClientOptions) =>
   [options.baseUrl, options.workspaceId, options.timeoutMs, options.apiKey].join(" ")
 
-/**
- * One Honcho client per (endpoint, workspace, timeout, key). Reusing the client lets
- * `updateClientTelemetry` keep `X-Honcho-Agent-Model` current without rebuilding it.
- */
+/** One client per (endpoint, workspace, timeout, key); reuse keeps X-Honcho-Agent-Model current. */
 export const createHonchoClientCache = () => {
   const clients = new Map<string, Honcho>()
   return {

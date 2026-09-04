@@ -162,8 +162,6 @@ const writeGlobalSettings = async (settings: GlobalSettings) => {
   return configPath
 }
 
-// Identity + connection through the shared runtime: env precedence, ${VAR} interpolation,
-// baseUrl normalization, and v0 key migration all match the server plugin and sibling harnesses.
 const resolveShared = (settings: GlobalSettings) => resolveConfig(settings, { host: HOST_ID })
 
 const normalizeSettings = (settings: GlobalSettings) => {

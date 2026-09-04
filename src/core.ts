@@ -76,9 +76,9 @@ export type HonchoSettings = {
   agentObserveMe: boolean
   sessionStrategy: SessionStrategy
   removeUserPrefix: boolean
-  /** HTTP timeout passed to the Honcho SDK. Resolved by @honcho-ai/harness-plugin-core. */
+  /** HTTP timeout passed to the Honcho SDK. */
   timeoutMs: number
-  /** Kill switch (root or hosts.opencode). false makes every hook and memory tool a no-op. */
+  /** Kill switch: false makes every hook and memory tool a no-op. */
   enabled: boolean
 }
 
@@ -130,11 +130,8 @@ export const SHARED_SETTINGS_FILE_NAME = "config.json"
 
 export const userHomeDir = () => process.env.HOME || process.env.USERPROFILE || homedir()
 
-// Same contract as the shared runtime's configPath(): HONCHO_CONFIG_PATH wins, else
-// ~/.honcho/config.json. Resolved through userHomeDir() rather than os.homedir()
-// because Bun caches homedir() at startup and ignores a HOME set later in-process,
-// which would make a HOME override (tests, sandboxes) silently read and write the
-// real user config.
+// Mirrors core's configPath(). Uses userHomeDir() because Bun caches os.homedir() at
+// startup, so a HOME override would otherwise read the real user config.
 export const sharedGlobalSettingsPath = () =>
   process.env.HONCHO_CONFIG_PATH || path.join(userHomeDir(), SHARED_SETTINGS_DIR_NAME, SHARED_SETTINGS_FILE_NAME)
 

@@ -69,7 +69,7 @@ type RuntimeHandle = {
   configPath: string
   globalConfigPath: string
   config: HonchoSettings
-  /** Non-fatal notes from the shared config resolver (e.g. unset ${VAR}, env shadowing a file key). */
+  /** Non-fatal notes from the shared config resolver. */
   configWarnings: string[]
   workspaceId: string
   sessionId: string
@@ -203,8 +203,6 @@ const expandEnv = (value: string) =>
 const hasConfiguredAuth = (settings: HonchoSettings) =>
   Boolean(settings.apiKey) || settings.baseUrl !== DEFAULT_SETTINGS.baseUrl
 
-// `enabled` is the shared-runtime kill switch (root or hosts.opencode, or HONCHO_ENABLED=false).
-// Disabled means inert: no capture, no injection, no memory tools. Config tools keep working.
 const isRuntimeEnabled = (settings: Pick<HonchoSettings, "enabled">) => settings.enabled !== false
 
 const DISABLED_MESSAGE = "Honcho is disabled for OpenCode (enabled=false). Re-enable with /honcho:config or honcho_set_config field=enabled value=true."
@@ -588,21 +586,13 @@ const readJsonFile = async (configPath: string) => {
 
 const readConfigFile = async (configPath: string) => normalizedRawSettings((await readJsonFile(configPath)) ?? {})
 
-// Only the OpenCode-specific env override lives here. HONCHO_API_KEY, HONCHO_URL /
-// HONCHO_BASE_URL, HONCHO_WORKSPACE(_ID), HONCHO_PEER_NAME, HONCHO_TIMEOUT_MS and
-// HONCHO_ENABLED are applied by the shared runtime's resolveConfig.
+// Shared HONCHO_* env vars are applied by resolveConfig; only the OpenCode-only one lives here.
 const envSettings = (): Record<string, unknown> => ({
   aiPeer: process.env.HONCHO_AI_PEER || "",
 })
 
-/**
- * Two layers, one file:
- * - identity + connection + kill switch (peerName, workspace, baseUrl, timeoutMs, auth, enabled)
- *   come from @honcho-ai/harness-plugin-core, which owns env precedence, `${VAR}` interpolation,
- *   baseUrl normalization, and v0 → v1 key migration (environmentUrl, workspaceId, top-level apiKey).
- * - OpenCode-only host keys (aiPeer, recallMode, observationMode, agentObserveMe, sessionStrategy,
- *   removeUserPrefix) are read from hosts.opencode by this plugin.
- */
+// Identity, connection, and enabled resolve through harness-plugin-core; the OpenCode-only
+// host keys (aiPeer, recallMode, observationMode, ...) are read from hosts.opencode here.
 const resolveSettings = async (configPathOverride?: string) => {
   const configPath = sharedConfigPath(configPathOverride)
   const { globalConfigPath, globalRaw, rawFile } = await ensureSharedGlobalSettings(configPath)
@@ -825,7 +815,6 @@ const sessionPeerAdditions = (topology: PeerTopology) =>
 
 type RuntimeClientFactory = {
   clientFor: (options: HonchoClientOptions) => Honcho
-  /** Agent completion model for this OpenCode session, if a hook has reported one. */
   modelFor: (sessionId: string) => string | undefined
 }
 
@@ -859,8 +848,7 @@ const validateSetupConnection = async (options: HonchoClientOptions) => {
   await honcho.session(normalizeId(`setup-check:${options.workspaceId}`))
 }
 
-// `providerID/modelID` (e.g. `openrouter/anthropic/claude-sonnet-4-5`): the bare model id is
-// ambiguous across providers, and OpenCode reports both on every chat hook.
+// providerID/modelID, since a bare model id is ambiguous across providers.
 const extractModelId = (input: Record<string, unknown> | undefined) => {
   const model = isRecord(input?.model) ? input.model : null
   if (!model) return null
@@ -1003,7 +991,7 @@ export const createHonchoRuntimePlugin =
   async (pluginInput) => {
     const sessionStates = new Map<string, SessionState>()
     const clients = createHonchoClientCache()
-    // OpenCode session id → agent model id, reported by chat hooks. Sent as X-Honcho-Agent-Model.
+    // session id → agent model, sent as X-Honcho-Agent-Model
     const sessionModels = new Map<string, string>()
 
     const rememberSessionModel = (input: Record<string, unknown> | undefined) => {

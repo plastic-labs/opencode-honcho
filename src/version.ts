@@ -1,3 +1,2 @@
-// Kept in sync with package.json by tests/harness-core.test.js. dist is bundled, so the
-// runtime cannot read package.json at import time without dragging it into rootDir.
+// Kept in sync with package.json by tests; the bundled dist cannot read package.json at runtime.
 export const PLUGIN_VERSION = "0.1.3"

@@ -6,8 +6,7 @@ import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises"
 
 import { createHonchoRuntimePlugin, __testing } from "../dist/index.js"
 
-// Coverage for the @honcho-ai/harness-plugin-core integration: shared config resolution
-// (HONCHO_CONFIG_PATH, schema v0/v1, env precedence, timeoutMs, enabled) and telemetry headers.
+// Coverage for the @honcho-ai/harness-plugin-core integration: config resolution and telemetry headers.
 
 const withEnv = async (entries, action) => {
   const previous = new Map()
