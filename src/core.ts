@@ -231,9 +231,9 @@ export const honchoSessionKey = (
 
 export const deriveUserPeerId = (peerName: string, removeUserPrefix: boolean) => {
   const name = peerName.trim() || "user"
-  // removeUserPrefix=true exists to share a peer with the sibling claude-honcho /
-  // hermes-honcho plugins, which use the peer name verbatim. Running it through
-  // normalizeId would lowercase "Stefano" into a separate, empty "stefano" peer.
+  // The sibling claude-honcho / hermes-honcho plugins use the peer name
+  // verbatim (no case folding), so removeUserPrefix=true must skip normalizeId
+  // to achieve real parity instead of silently lowercasing into a different peer.
   return removeUserPrefix ? name : normalizeId(`user:${name}`)
 }
 

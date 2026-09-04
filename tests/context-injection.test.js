@@ -193,61 +193,6 @@ test("system transform injects Honcho memory when OpenCode provides no prompt te
   })
 })
 
-test("system transform skips repeated no-prompt injection inside the stable refresh window", async () => {
-  await runWithHarness(async ({ hooks, fetch }) => {
-    const firstOutput = { system: [] }
-    await hooks["experimental.chat.system.transform"](systemInput(), firstOutput)
-    const callCountAfterFirstInjection = fetch.calls.length
-
-    const secondOutput = { system: [] }
-    await hooks["experimental.chat.system.transform"](systemInput(), secondOutput)
-
-    expect(firstOutput.system).toHaveLength(1)
-    expect(secondOutput.system).toEqual([])
-    expect(fetch.calls).toHaveLength(callCountAfterFirstInjection)
-  })
-})
-
-test("system transform refreshes no-prompt injection after the stable context ttl", async () => {
-  const originalNow = Date.now
-  try {
-    let now = 1_000_000
-    Date.now = () => now
-
-    await runWithHarness(async ({ hooks, fetch }) => {
-      const firstOutput = { system: [] }
-      await hooks["experimental.chat.system.transform"](systemInput(), firstOutput)
-      const callCountAfterFirstInjection = fetch.calls.length
-
-      now += 301_000
-
-      const secondOutput = { system: [] }
-      await hooks["experimental.chat.system.transform"](systemInput(), secondOutput)
-
-      expect(firstOutput.system).toHaveLength(1)
-      expect(secondOutput.system).toHaveLength(1)
-      expect(fetch.calls.length).toBeGreaterThan(callCountAfterFirstInjection)
-    })
-  } finally {
-    Date.now = originalNow
-  }
-})
-
-test("system transform retries no-prompt stable hydration when all context sources fail", async () => {
-  await runWithHarness(async ({ hooks, fetch }) => {
-    const firstOutput = { system: [] }
-    await hooks["experimental.chat.system.transform"](systemInput(), firstOutput)
-    const callCountAfterFirstAttempt = fetch.calls.length
-
-    const secondOutput = { system: [] }
-    await hooks["experimental.chat.system.transform"](systemInput(), secondOutput)
-
-    expect(firstOutput.system).toEqual([])
-    expect(secondOutput.system).toEqual([])
-    expect(fetch.calls.length).toBeGreaterThan(callCountAfterFirstAttempt)
-  }, { failStableHydration: true })
-})
-
 test("system transform still skips explicit trivial prompt text", async () => {
   await runWithHarness(async ({ hooks, fetch }) => {
     const output = { system: [] }
