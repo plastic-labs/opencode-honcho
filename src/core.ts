@@ -2,7 +2,7 @@ import { existsSync } from "node:fs"
 import { homedir } from "node:os"
 import { readFile } from "node:fs/promises"
 import path from "node:path"
-import { DEFAULT_BASE_URL, DEFAULT_TIMEOUT_MS } from "@honcho-ai/harness-plugin-core"
+import { DEFAULT_BASE_URL, DEFAULT_TIMEOUT_MS, configPath } from "@honcho-ai/harness-plugin-core"
 
 export const SESSION_STRATEGIES = [
   "per-repo",
@@ -130,10 +130,7 @@ export const SHARED_SETTINGS_FILE_NAME = "config.json"
 
 export const userHomeDir = () => process.env.HOME || process.env.USERPROFILE || homedir()
 
-// Mirrors core's configPath(). Uses userHomeDir() because Bun caches os.homedir() at
-// startup, so a HOME override would otherwise read the real user config.
-export const sharedGlobalSettingsPath = () =>
-  process.env.HONCHO_CONFIG_PATH || path.join(userHomeDir(), SHARED_SETTINGS_DIR_NAME, SHARED_SETTINGS_FILE_NAME)
+export const sharedGlobalSettingsPath = () => configPath()
 
 export const normalizeId = (value: string) =>
   value.toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "") || "default"
