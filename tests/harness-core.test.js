@@ -135,15 +135,10 @@ const statusOf = async (hooks, rootDir) =>
 const pluginVersion = async () =>
   JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf-8")).version
 
-const runtimeVersion = async () =>
-  JSON.parse(
-    await readFile(new URL("../node_modules/@honcho-ai/harness-plugin-core/package.json", import.meta.url), "utf-8"),
-  ).version
-
 test("__testing exposes the identity the plugin reports to Honcho", async () => {
   expect(__testing.hostId).toBe("opencode")
+  expect(__testing.pluginId).toBe("opencode-honcho")
   expect(__testing.pluginVersion).toBe(await pluginVersion())
-  expect(__testing.harnessRuntimeVersion).toBe(await runtimeVersion())
 })
 
 test("HONCHO_CONFIG_PATH points the plugin at an alternate shared config", async () => {
@@ -315,11 +310,10 @@ test("honcho_set_config accepts timeoutMs as a positive number and rejects junk"
   })
 })
 
-test("every Honcho request carries host, plugin, runtime, and current agent model telemetry headers", async () => {
+test("every Honcho request carries host, plugin, and current agent model telemetry headers", async () => {
   const { rootDir, homeDir } = await makeDirs("telemetry")
   const fetch = createHonchoFetch()
   const expectedPlugin = await pluginVersion()
-  const expectedRuntime = await runtimeVersion()
 
   await withMockFetch(fetch, () =>
     withEnv({ ...CLEAN_SHARED_ENV, HOME: homeDir, HONCHO_API_KEY: "telemetry-key" }, async () => {
@@ -332,9 +326,10 @@ test("every Honcho request carries host, plugin, runtime, and current agent mode
 
       expect(fetch.calls.length).toBeGreaterThan(0)
       for (const call of fetch.calls) {
-        expect(call.headers.get("X-Honcho-Host")).toBe("opencode")
-        expect(call.headers.get("X-Honcho-Plugin")).toBe(expectedPlugin)
-        expect(call.headers.get("X-Honcho-Runtime")).toBe(expectedRuntime)
+        // The server plugin has no OpenCode version to report, so the host token is bare.
+        expect(call.headers.get("X-Honcho-Host")).toBe(`opencode (${process.platform})`)
+        expect(call.headers.get("X-Honcho-Plugin")).toBe(`opencode-honcho/${expectedPlugin}`)
+        expect(call.headers.has("X-Honcho-Runtime")).toBe(false)
         expect(call.headers.get("X-Honcho-Agent-Model")).toBe("anthropic/claude-sonnet-4-5")
       }
 
@@ -353,9 +348,9 @@ test("every Honcho request carries host, plugin, runtime, and current agent mode
       const status = await statusOf(hooks, rootDir)
       expect(status.telemetry).toEqual({
         host: "opencode",
+        plugin: "opencode-honcho",
         pluginVersion: expectedPlugin,
         model: "anthropic/claude-opus-4",
-        runtimeVersion: expectedRuntime,
       })
     }),
   )

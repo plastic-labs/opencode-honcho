@@ -2,7 +2,6 @@ import { Honcho } from "@honcho-ai/sdk"
 import {
   setTelemetryHeaders,
   telemetryHeaders,
-  version as HARNESS_RUNTIME_VERSION,
   type TelemetryIdentity,
 } from "@honcho-ai/harness-plugin-core"
 import { PLUGIN_VERSION } from "./version.js"
@@ -10,7 +9,10 @@ import { PLUGIN_VERSION } from "./version.js"
 /** Host name reported to Honcho and used for the `hosts.<host>` config block. */
 export const HOST_ID = "opencode"
 
-export { HARNESS_RUNTIME_VERSION, PLUGIN_VERSION }
+/** Integration name sent as `X-Honcho-Plugin: opencode-honcho/<version>`. */
+export const PLUGIN_ID = "opencode-honcho"
+
+export { PLUGIN_VERSION }
 
 export type TelemetryOverrides = Pick<TelemetryIdentity, "hostVersion" | "model">
 
@@ -21,9 +23,13 @@ export type HonchoClientOptions = TelemetryOverrides & {
   timeoutMs: number
 }
 
-/** Identity every request carries: host + plugin version, plus whatever the caller knows. */
+/**
+ * Identity every request carries: host and plugin, plus whatever the caller knows.
+ * Platform is filled in by harness-plugin-core (`process.platform`).
+ */
 export const telemetryIdentity = (overrides: TelemetryOverrides = {}): TelemetryIdentity => ({
   host: HOST_ID,
+  plugin: PLUGIN_ID,
   pluginVersion: PLUGIN_VERSION,
   ...(overrides.hostVersion ? { hostVersion: overrides.hostVersion } : {}),
   ...(overrides.model ? { model: overrides.model } : {}),

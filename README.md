@@ -119,9 +119,8 @@ Every request to Honcho identifies the caller so usage can be attributed per har
 
 | Header | Value |
 | --- | --- |
-| `X-Honcho-Host` | `opencode` (with the OpenCode version appended as `opencode/<version>` where the TUI exposes it) |
-| `X-Honcho-Plugin` | This plugin's version |
-| `X-Honcho-Runtime` | The `@honcho-ai/harness-plugin-core` version |
+| `X-Honcho-Host` | `opencode (<platform>)`, or `opencode/<version> (<platform>)` where the TUI exposes the OpenCode version |
+| `X-Honcho-Plugin` | `opencode-honcho/<version>` |
 | `X-Honcho-Agent-Model` | `providerID/modelID` of the OpenCode completion model for the current session (e.g. `openrouter/anthropic/claude-sonnet-4-5`), once a chat hook has reported it. Switching models mid-session (`-m`, `/models`) updates it on the next request |
 
 ### Cloud vs Local

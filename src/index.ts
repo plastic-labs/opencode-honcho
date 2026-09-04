@@ -4,8 +4,8 @@ import { tool, type Plugin, type PluginInput } from "@opencode-ai/plugin"
 import type { Honcho } from "@honcho-ai/sdk"
 import { resolveConfig } from "@honcho-ai/harness-plugin-core"
 import {
-  HARNESS_RUNTIME_VERSION,
   HOST_ID,
+  PLUGIN_ID,
   PLUGIN_VERSION,
   createHonchoClient,
   createHonchoClientCache,
@@ -1117,10 +1117,7 @@ export const createHonchoRuntimePlugin =
         baseUrl: handle.config.baseUrl,
         timeoutMs: handle.config.timeoutMs,
         configWarnings: handle.configWarnings,
-        telemetry: {
-          ...telemetryIdentity({ model: sessionModels.get(handle.sessionId) }),
-          runtimeVersion: HARNESS_RUNTIME_VERSION,
-        },
+        telemetry: telemetryIdentity({ model: sessionModels.get(handle.sessionId) }),
         peers: describePeers(handle),
         recentConclusions: state.recentConclusions,
         stableContext: state.stableContext,
@@ -1791,7 +1788,7 @@ export const __testing = {
   extractModelId,
   isRuntimeEnabled,
   hostId: HOST_ID,
+  pluginId: PLUGIN_ID,
   pluginVersion: PLUGIN_VERSION,
-  harnessRuntimeVersion: HARNESS_RUNTIME_VERSION,
 }
 export default HonchoRuntimePlugin

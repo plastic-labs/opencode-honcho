@@ -9,8 +9,7 @@
     "outDir": "./dist",
     "skipLibCheck": true,
     "esModuleInterop": true,
-    "types": ["bun", "node"],
-    "allowImportingTsExtensions": true
+    "types": ["bun", "node"]
   },
   "include": ["src/**/*.ts"]
 }
