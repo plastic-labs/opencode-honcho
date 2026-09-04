@@ -318,35 +318,78 @@ test("every Honcho request carries host, plugin, and current agent model telemet
     withEnv({ ...CLEAN_SHARED_ENV, HOME: homeDir, HONCHO_API_KEY: "telemetry-key" }, async () => {
       const hooks = await createPluginHarness(rootDir)
 
-      await hooks["chat.message"](
-        { sessionID: "ses_test", model: { providerID: "anthropic", modelID: "claude-sonnet-4-5" } },
-        { message: { time: { created: 0 } }, parts: [{ type: "text", text: "let us continue the refactor" }] },
-      )
-
+      // OpenCode never hands the plugin its version directly; Session.version on the
+      // session.created event names the running version.
+      await hooks.event({
+        event: { type: "session.created", properties: { info: { id: "ses_test", version: "1.18.23" } } },
+      })
       expect(fetch.calls.length).toBeGreaterThan(0)
       for (const call of fetch.calls) {
-        // The server plugin has no OpenCode version to report, so the host token is bare.
-        expect(call.headers.get("X-Honcho-Host")).toBe(`opencode (${process.platform})`)
+        expect(call.headers.get("X-Honcho-Host")).toBe(`opencode/1.18.23 (${process.platform})`)
+        expect(call.headers.has("X-Honcho-Agent-Model")).toBe(false)
+      }
+
+      // Without an explicit -m, chat.message has no input.model; the resolved model lives on the user message.
+      let before = fetch.calls.length
+      await hooks["chat.message"](
+        { sessionID: "ses_test" },
+        {
+          message: { time: { created: 0 }, model: { providerID: "anthropic", modelID: "claude-sonnet-4-5" } },
+          parts: [{ type: "text", text: "let us continue the refactor" }],
+        },
+      )
+      let later = fetch.calls.slice(before)
+      expect(later.length).toBeGreaterThan(0)
+      for (const call of later) {
+        expect(call.headers.get("X-Honcho-Host")).toBe(`opencode/1.18.23 (${process.platform})`)
         expect(call.headers.get("X-Honcho-Plugin")).toBe(`opencode-honcho/${expectedPlugin}`)
         expect(call.headers.has("X-Honcho-Runtime")).toBe(false)
         expect(call.headers.get("X-Honcho-Agent-Model")).toBe("anthropic/claude-sonnet-4-5")
       }
 
-      // Model changes mid-session are pushed onto the cached client (setTelemetryHeaders).
-      const before = fetch.calls.length
-      await hooks["chat.message"](
-        { sessionID: "ses_test", model: { providerID: "anthropic", modelID: "claude-opus-4" } },
-        { message: { time: { created: 1 } }, parts: [{ type: "text", text: "and now with a different model" }] },
-      )
-      const later = fetch.calls.slice(before)
+      // The completed assistant message names the model that answered; it is pushed onto the
+      // cached client (setTelemetryHeaders) and tracks mid-session model switches.
+      before = fetch.calls.length
+      await hooks.event({
+        event: {
+          type: "message.updated",
+          properties: {
+            info: {
+              id: "msg_1",
+              sessionID: "ses_test",
+              role: "assistant",
+              providerID: "anthropic",
+              modelID: "claude-opus-4",
+              time: { created: 1, completed: 2 },
+            },
+          },
+        },
+      })
+      later = fetch.calls.slice(before)
       expect(later.length).toBeGreaterThan(0)
       for (const call of later) {
         expect(call.headers.get("X-Honcho-Agent-Model")).toBe("anthropic/claude-opus-4")
       }
 
+      // The system hook also runs for OpenCode's title-generation agent, so it is not a model source.
+      before = fetch.calls.length
+      await hooks["experimental.chat.system.transform"](
+        { sessionID: "ses_test", model: { providerID: "openrouter", id: "google/gemini-flash" } },
+        { system: [] },
+      )
+      for (const call of fetch.calls.slice(before)) {
+        expect(call.headers.get("X-Honcho-Agent-Model")).toBe("anthropic/claude-opus-4")
+      }
+
+      // A resumed session may carry the older version that created it; it does not override the known version.
+      await hooks.event({
+        event: { type: "session.updated", properties: { info: { id: "ses_old", version: "1.17.0" } } },
+      })
+
       const status = await statusOf(hooks, rootDir)
       expect(status.telemetry).toEqual({
         host: "opencode",
+        hostVersion: "1.18.23",
         plugin: "opencode-honcho",
         pluginVersion: expectedPlugin,
         model: "anthropic/claude-opus-4",

@@ -119,9 +119,9 @@ Every request to Honcho identifies the caller so usage can be attributed per har
 
 | Header | Value |
 | --- | --- |
-| `X-Honcho-Host` | `opencode (<platform>)`, or `opencode/<version> (<platform>)` where the TUI exposes the OpenCode version |
+| `X-Honcho-Host` | `opencode/<version> (<platform>)`. The OpenCode version is read from the first session event the process emits (`Session.version`); until then, and for the workspace bootstrap request, the token is a bare `opencode (<platform>)` |
 | `X-Honcho-Plugin` | `opencode-honcho/<version>` |
-| `X-Honcho-Agent-Model` | `providerID/modelID` of the OpenCode completion model for the current session (e.g. `openrouter/anthropic/claude-sonnet-4-5`), once a chat hook has reported it. Switching models mid-session (`-m`, `/models`) updates it on the next request |
+| `X-Honcho-Agent-Model` | `providerID/modelID` of the OpenCode completion model for the current session (e.g. `openrouter/anthropic/claude-sonnet-4-5`). Read from the resolved user message on `chat.message` and from each assistant message as it completes, so switching models mid-session (`-m`, `/models`) updates it on the next request. Absent only on the workspace bootstrap request that precedes the first message |
 
 ### Cloud vs Local
 
