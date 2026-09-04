@@ -73,6 +73,8 @@ OpenCode reads and writes this shared config file directly. OpenCode-specific de
   "apiKey": "hch-...",
   "peerName": "user",
   "baseUrl": "https://api.honcho.dev",
+  "timeoutMs": 30000, // optional; Honcho HTTP timeout
+  "enabled": true, // optional; false turns off every Honcho harness plugin that reads this file
   "hosts": {
     "opencode": {
       "workspace": "opencode",
@@ -82,11 +84,44 @@ OpenCode reads and writes this shared config file directly. OpenCode-specific de
       "agentObserveMe": false, // true opts into self-observation on the root agent peer
       "sessionStrategy": "per-directory",
       "removeUserPrefix": true, // true uses the bare peerName; false (default on upgrade) keeps the legacy user-<peerName> peer
-      "apiKey": "hch-..." // optional; overrides the root apiKey for this host
+      "apiKey": "hch-...", // optional; overrides the root apiKey for this host
+      "enabled": true, // optional; false turns off only the OpenCode plugin
+      "timeoutMs": 30000 // optional; overrides the root timeout for this host
     }
   }
 }
 ```
+
+### Shared runtime
+
+Identity, connection, and the kill switch (`peerName`, `workspace`, `baseUrl`, `timeoutMs`, `apiKey`, `enabled`) are resolved by [`@honcho-ai/harness-plugin-core`](https://github.com/plastic-labs/honcho/tree/main/harness-plugin-core), the runtime shared by every Honcho harness plugin. The OpenCode-only keys (`aiPeer`, `recallMode`, `observationMode`, `agentObserveMe`, `sessionStrategy`, `removeUserPrefix`) are read from `hosts.opencode` by this plugin.
+
+Resolution, highest wins: `HONCHO_*` environment → `hosts.opencode` → root → built-in.
+
+| Environment variable | Overrides |
+| --- | --- |
+| `HONCHO_CONFIG_PATH` | Location of the shared config file (default `~/.honcho/config.json`) |
+| `HONCHO_API_KEY` | `apiKey` |
+| `HONCHO_URL`, `HONCHO_BASE_URL` | `baseUrl` (`local` means `http://localhost:8000`) |
+| `HONCHO_WORKSPACE`, `HONCHO_WORKSPACE_ID` | `workspace` |
+| `HONCHO_PEER_NAME` | `peerName` |
+| `HONCHO_TIMEOUT_MS` | `timeoutMs` |
+| `HONCHO_ENABLED=false` | `enabled` |
+| `HONCHO_AI_PEER` | `hosts.opencode.aiPeer` (OpenCode only) |
+
+String values may reference environment variables as `${VAR}`. Older files are read as-is: `environmentUrl`, `workspaceId`, and a top-level `apiKey` are remapped in memory, and the file is never rewritten just to migrate it. A root `workspace` is honored as the default when `hosts.opencode.workspace` is unset.
+
+When `enabled` is `false` (root, `hosts.opencode`, or `HONCHO_ENABLED=false`) the plugin is inert: no capture, no prompt injection, no `shell.env` exports, and the memory tools return a "disabled" error. `/honcho:status`, `/honcho:settings`, `/honcho:setup`, and `/honcho:config` keep working so you can turn it back on (`honcho_set_config field=enabled value=true`).
+
+### Telemetry headers
+
+Every request to Honcho identifies the caller so usage can be attributed per harness. No conversation content is added.
+
+| Header | Value |
+| --- | --- |
+| `X-Honcho-Host` | `opencode/<version> (<platform>)`. The OpenCode version is read from the first session event the process emits (`Session.version`); until then, and for the workspace bootstrap request, the token is a bare `opencode (<platform>)` |
+| `X-Honcho-Plugin` | `opencode-honcho/<version>` |
+| `X-Honcho-Agent-Model` | `providerID/modelID` of the OpenCode completion model for the current session (e.g. `openrouter/anthropic/claude-sonnet-4-5`). Read from the resolved user message on `chat.message` and from each assistant message as it completes, so switching models mid-session (`-m`, `/models`) updates it on the next request. Absent only on the workspace bootstrap request that precedes the first message |
 
 ### Cloud vs Local
 

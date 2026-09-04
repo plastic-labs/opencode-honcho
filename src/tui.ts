@@ -1,7 +1,8 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises"
 import path from "node:path"
 import type { TuiPlugin, TuiPluginModule } from "@opencode-ai/plugin/tui"
-import { Honcho } from "@honcho-ai/sdk"
+import { resolveConfig } from "@honcho-ai/harness-plugin-core"
+import { HOST_ID, createHonchoClient } from "./honcho-client.js"
 import { executeOpenCodeImport, planOpenCodeImport } from "./import.js"
 import {
   DEFAULT_SETTINGS,
@@ -161,15 +162,23 @@ const writeGlobalSettings = async (settings: GlobalSettings) => {
   return configPath
 }
 
-const normalizeSettings = (settings: GlobalSettings) => ({
-  baseUrl:
-    typeof settings.baseUrl === "string" && settings.baseUrl.trim()
-      ? settings.baseUrl
-      : DEFAULT_SETTINGS.baseUrl,
-  apiKey:
-    typeof settings.apiKey === "string" && settings.apiKey.trim() ? settings.apiKey.trim() : "",
-  peerName: typeof settings.peerName === "string" ? settings.peerName.trim() : "",
-})
+const resolveShared = (settings: GlobalSettings) => resolveConfig(settings, { host: HOST_ID })
+
+const normalizeSettings = (settings: GlobalSettings) => {
+  const shared = resolveShared(settings)
+  return {
+    baseUrl: shared.baseUrl,
+    apiKey: shared.apiKey?.trim() ?? "",
+    peerName: shared.peerName,
+    timeoutMs: shared.timeoutMs,
+    enabled: shared.enabled,
+  }
+}
+
+const isConfigured = (settings: GlobalSettings) => {
+  const normalized = normalizeSettings(settings)
+  return Boolean(normalized.apiKey) || isLocalBaseUrl(normalized.baseUrl)
+}
 
 const validateCloudApiKey = (value: string) =>
   value.trim() ? null : "Honcho Cloud requires a Honcho API key. Enter a non-empty key or choose Self-hosted / local."
@@ -195,7 +204,7 @@ const statusMessage = (
   liveStatus?: { workspaceName?: string; openCodeSessionId?: string },
 ) => {
   const normalized = normalizeSettings(settings)
-  const configured = Boolean(normalized.apiKey) || isLocalBaseUrl(normalized.baseUrl)
+  const configured = isConfigured(settings)
   const deployment = isLocalBaseUrl(normalized.baseUrl)
     ? "Local / self-hosted"
     : normalized.baseUrl === DEFAULT_SETTINGS.baseUrl
@@ -207,11 +216,17 @@ const statusMessage = (
     `Base URL: ${normalized.baseUrl}`,
     `API key: ${normalized.apiKey ? "set" : "not set"}`,
     `Peer name: ${normalized.peerName || "user"}`,
+    `Enabled: ${normalized.enabled ? "yes" : "no"}`,
+    `Timeout: ${normalized.timeoutMs} ms`,
     ...(liveStatus?.workspaceName ? [`Workspace: ${liveStatus.workspaceName}`] : []),
     ...(liveStatus?.openCodeSessionId ? [`OpenCode session: ${liveStatus.openCodeSessionId}`] : []),
     `Config path: ${sharedGlobalSettingsPath()}`,
     "",
-    configured ? "Honcho is ready for OpenCode." : "Run /honcho:setup to finish configuration.",
+    !normalized.enabled
+      ? "Honcho is disabled for OpenCode (enabled=false). Set hosts.opencode.enabled to true to re-enable."
+      : configured
+        ? "Honcho is ready for OpenCode."
+        : "Run /honcho:setup to finish configuration.",
     ...(configured && needsObservationUpgradePrompt(settings as Record<string, unknown>)
       ? ["", observationUpgradeNotice()]
       : []),
@@ -220,11 +235,14 @@ const statusMessage = (
 
 const settingsMessage = (settings: GlobalSettings) => {
   const host = settings.hosts?.opencode || {}
+  const normalized = normalizeSettings(settings)
   return [
     `Config path: ${sharedGlobalSettingsPath()}`,
-    `API key: ${settings.apiKey?.trim() ? "set" : "not set"}`,
-    `Peer name: ${settings.peerName?.trim() || "user"}`,
-    `Base URL: ${settings.baseUrl?.trim() || DEFAULT_SETTINGS.baseUrl}`,
+    `API key: ${normalized.apiKey ? "set" : "not set"}`,
+    `Peer name: ${normalized.peerName || "user"}`,
+    `Base URL: ${normalized.baseUrl}`,
+    `Enabled: ${normalized.enabled ? "true" : "false"}`,
+    `Timeout (ms): ${normalized.timeoutMs}`,
     `Workspace: ${host.workspace || DEFAULT_SETTINGS.workspace}`,
     `AI peer: ${host.aiPeer || DEFAULT_SETTINGS.aiPeer}`,
     `Recall mode: ${host.recallMode || DEFAULT_SETTINGS.recallMode}`,
@@ -300,7 +318,7 @@ const openObservationUpgradeDialog = (
 const maybePromptObservationUpgrade = async (api: Parameters<TuiPlugin>[0]) => {
   try {
     const settings = await readGlobalSettings()
-    const configured = Boolean(settings.apiKey?.trim()) || isLocalBaseUrl(settings.baseUrl || "")
+    const configured = isConfigured(settings)
     const raw = await readSharedConfig()
     if (!configured || !needsObservationUpgradePrompt(raw)) return
     openObservationUpgradeDialog(api, [])
@@ -377,16 +395,18 @@ const openSettingsDialog = async (api: Parameters<TuiPlugin>[0]) => {
 
 const importConfigFromSettings = (settings: GlobalSettings) => {
   const host = settings.hosts?.opencode || {}
-  const workspaceId = (host.workspace || DEFAULT_SETTINGS.workspace).trim() || DEFAULT_SETTINGS.workspace
+  const shared = resolveShared(settings)
+  const workspaceId = shared.workspace.trim() || DEFAULT_SETTINGS.workspace
   const aiPeer = host.aiPeer || DEFAULT_SETTINGS.aiPeer
   const { userPeerId, agentPeerId } = resolveSessionPeerIds(
-    settings.peerName || "user",
+    shared.peerName || "user",
     aiPeer,
     host.removeUserPrefix === true,
   )
   return {
-    apiKey: settings.apiKey || "",
-    baseUrl: settings.baseUrl || DEFAULT_SETTINGS.baseUrl,
+    apiKey: shared.apiKey ?? "",
+    baseUrl: shared.baseUrl,
+    timeoutMs: shared.timeoutMs,
     workspaceId,
     userPeerId,
     agentPeerId,
@@ -413,7 +433,7 @@ const formatImportPreview = (plan: Awaited<ReturnType<typeof planOpenCodeImport>
 
 const openImportDialog = async (api: Parameters<TuiPlugin>[0]) => {
   const settings = await readGlobalSettings()
-  const configured = Boolean(settings.apiKey?.trim()) || isLocalBaseUrl(settings.baseUrl || "")
+  const configured = isConfigured(settings)
   if (!configured) {
     api.ui.dialog.replace(() =>
       api.ui.DialogAlert({
@@ -474,10 +494,12 @@ const openImportDialog = async (api: Parameters<TuiPlugin>[0]) => {
         }
         void (async () => {
           try {
-            const honcho = new Honcho({
-              apiKey: config.apiKey || undefined,
-              baseURL: config.baseUrl || undefined,
+            const honcho = createHonchoClient({
+              apiKey: config.apiKey,
+              baseUrl: config.baseUrl,
               workspaceId: config.workspaceId,
+              timeoutMs: config.timeoutMs,
+              hostVersion: api.app?.version,
             })
             const result = await executeOpenCodeImport({
               client: api.client,
@@ -529,7 +551,7 @@ const openSetupConfirmation = async (
         const summary = [`Saved settings to ${configPath}`, ...summaryLines, `Peer name: ${peerName.trim() || "user"}`]
         const raw = await readSharedConfig()
         const settings = await readGlobalSettings()
-        const configured = Boolean(settings.apiKey?.trim()) || isLocalBaseUrl(settings.baseUrl || "")
+        const configured = isConfigured(settings)
         if (configured && needsObservationUpgradePrompt(raw)) {
           openObservationUpgradeDialog(api, summary)
           return

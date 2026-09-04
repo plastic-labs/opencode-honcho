@@ -2,6 +2,7 @@ import { existsSync } from "node:fs"
 import { homedir } from "node:os"
 import { readFile } from "node:fs/promises"
 import path from "node:path"
+import { DEFAULT_BASE_URL, DEFAULT_TIMEOUT_MS, configPath } from "@honcho-ai/harness-plugin-core"
 
 export const SESSION_STRATEGIES = [
   "per-repo",
@@ -75,11 +76,15 @@ export type HonchoSettings = {
   agentObserveMe: boolean
   sessionStrategy: SessionStrategy
   removeUserPrefix: boolean
+  /** HTTP timeout passed to the Honcho SDK. */
+  timeoutMs: number
+  /** Kill switch: false makes every hook and memory tool a no-op. */
+  enabled: boolean
 }
 
 export const DEFAULT_SETTINGS: HonchoSettings = {
   apiKey: "",
-  baseUrl: "https://api.honcho.dev",
+  baseUrl: DEFAULT_BASE_URL,
   peerName: "",
   aiPeer: "opencode",
   workspace: "opencode",
@@ -92,6 +97,8 @@ export const DEFAULT_SETTINGS: HonchoSettings = {
   sessionStrategy: "per-directory",
   // Default false for upgrades: keep the legacy user-<peerName> peer. New installs stamp true.
   removeUserPrefix: false,
+  timeoutMs: DEFAULT_TIMEOUT_MS,
+  enabled: true,
 }
 
 export const clampText = (value: string, maxChars: number) =>
@@ -123,8 +130,7 @@ export const SHARED_SETTINGS_FILE_NAME = "config.json"
 
 export const userHomeDir = () => process.env.HOME || process.env.USERPROFILE || homedir()
 
-export const sharedGlobalSettingsPath = () =>
-  path.join(userHomeDir(), SHARED_SETTINGS_DIR_NAME, SHARED_SETTINGS_FILE_NAME)
+export const sharedGlobalSettingsPath = () => configPath()
 
 export const normalizeId = (value: string) =>
   value.toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "") || "default"

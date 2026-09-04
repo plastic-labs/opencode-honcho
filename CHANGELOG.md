@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Resolve `peerName`, `workspace`, `baseUrl`, `apiKey`, `timeoutMs`, and `enabled` through `@honcho-ai/harness-plugin-core` (`HONCHO_*` env → `hosts.opencode` → root → built-in, with `${VAR}` interpolation and in-memory migration of legacy keys), replacing the plugin's own config merge and env expansion. New: `HONCHO_CONFIG_PATH`, root `workspace` as the default, `hosts.opencode.baseUrl` / `peerName` overrides, and `peerName` falling back to `$USER`.
+- Add `enabled` (kill switch) and `timeoutMs`. Both accept root, `hosts.opencode`, or env, are settable with `honcho_set_config`, and show in status/settings. Disabled installs skip capture, injection, `shell.env` exports, and the memory tools.
+- Send `X-Honcho-Host`, `X-Honcho-Plugin`, and `X-Honcho-Agent-Model` on every Honcho request, and reuse one client per endpoint/workspace/key. The host token carries the OpenCode version (`opencode/<version> (<platform>)`), read from `Session.version` on the first session event. The agent model comes from the resolved user message on `chat.message` and from each completed assistant message, so it is present without an explicit `-m` and no longer flips to the title-generation model. `honcho_status` reports `enabled`, `timeoutMs`, `configWarnings`, and `telemetry`.
 - Honor `hosts.opencode.apiKey` as an override of the root `apiKey`. Setup preserves a host-scoped key instead of copying or dropping it.
 - Add `hosts.opencode.observationMode`. New installs default to `unified`; configs that omit the field stay `directional`. `honcho_chat`, `honcho_create_conclusion`, and targeted prompt recall follow the mode.
 - Prompt on upgrade (`/honcho:setup`, `/honcho:status`, `/honcho:config`, and TUI launch) to keep directional or switch to unified, and suggest `/honcho:import` after switching so local history can be reingested.
