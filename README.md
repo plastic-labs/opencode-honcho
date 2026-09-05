@@ -44,6 +44,8 @@ If your shell cannot find `opencode`, restart your shell or source your shell co
 ## What You Get
 
 - **Persistent Memory** - OpenCode can retain durable context across sessions
+- **Hook-Driven Memory** - OpenCode hooks inject user/project memory at the start of every turn and record significant tool activity, so memory works regardless of the underlying model
+- **Honcho Memory Skill** - A `honcho-memory` skill is installed under OpenCode's documented global config directory (`~/.config/opencode/skills/honcho-memory`, or `$OPENCODE_CONFIG_DIR/skills/honcho-memory`) so the agent knows when to pull and save memory actively
 - **Cloud or Local Deployments** - Use Honcho Cloud or point at a self-hosted or local Honcho instance
 - **Workspace Mapping** - OpenCode projects map to Honcho workspaces
 - **Session Mapping** - Sessions can be scoped per directory, repo, branch, chat instance, or globally
@@ -192,6 +194,12 @@ The plugin uses these OpenCode plugin capabilities:
 - `experimental.session.compacting`
 - `shell.env`
 - `tool`
+
+### How hooks drive memory
+
+- `experimental.chat.system.transform` always appends Honcho memory instructions. With `recallMode: "hybrid"` or `"context"` it also injects a stable memory snapshot; prompt-specific memory is appended to the user turn by `chat.message`. With `recallMode: "tools"`, no memory content is injected automatically.
+- `tool.execute.after` records significant tool activity (shell commands, file edits, delegated tasks) into the session history so future recall reflects what was actually done. Read-only and trivial calls are skipped, and potentially credential-bearing shell arguments (API keys, passwords, cookies, authorization headers) are redacted before storage.
+- On session start (and after `honcho_setup` succeeds), the plugin copies the packaged `honcho-memory` skill into `~/.config/opencode/skills/honcho-memory`, or `$OPENCODE_CONFIG_DIR/skills/honcho-memory` when that override is set. An identical installed skill is left untouched.
 
 ## Development
 
