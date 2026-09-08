@@ -2,14 +2,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { tool, type Plugin, type PluginInput } from "@opencode-ai/plugin"
 import type { Honcho } from "@honcho-ai/sdk"
-import {
-  createHonchoClient,
-  createHonchoClientCache,
-  telemetryIdentity,
-  PLUGIN_VERSION,
-  type HonchoClientOptions,
-  type TelemetryOverrides,
-} from "./honcho-client.js"
+import { createHonchoClient, telemetryIdentity, PLUGIN_VERSION, type TelemetryOverrides } from "./honcho-client.js"
 import {
   DEFAULT_SETTINGS,
   clampText,
@@ -766,23 +759,18 @@ const buildPeerTopology = (handle: Pick<
 const sessionPeerAdditions = (topology: PeerTopology) =>
   Object.entries(topology.sessionPeerConfigs).map(([peerId, config]) => [peerId, config] as const)
 
-type RuntimeClientFactory = {
-  clientFor: (options: HonchoClientOptions) => Honcho
-  telemetryFor: (sessionId: string) => TelemetryOverrides
-}
-
 const createActiveRuntime = async (
   pluginInput: PluginInput,
   input: Record<string, unknown> | undefined,
-  factory: RuntimeClientFactory,
+  telemetryFor: (sessionId: string) => TelemetryOverrides,
   configPathOverride?: string,
 ): Promise<ActiveRuntime> => {
   const handle = await deriveRuntimeHandle(pluginInput, input, configPathOverride)
-  const honcho = factory.clientFor({
+  const honcho = createHonchoClient({
     apiKey: handle.config.apiKey,
     baseUrl: handle.config.baseUrl,
     workspaceId: handle.workspaceId,
-    ...factory.telemetryFor(handle.sessionId),
+    ...telemetryFor(handle.sessionId),
   })
   const userPeer = await honcho.peer(handle.userPeerId, {
     configuration: { observeMe: true },
@@ -952,12 +940,11 @@ export const createHonchoRuntimePlugin =
   ({ configPath }: RuntimePluginOptions = {}): Plugin =>
   async (pluginInput) => {
     const sessionStates = new Map<string, SessionState>()
-    const clients = createHonchoClientCache()
     // session id → agent model, sent as X-Honcho-Agent-Model
     const sessionModels = new Map<string, string>()
     // OpenCode version, sent in X-Honcho-Host. The plugin input does not carry it; every
     // Session object records the version that created it, and a process cannot change
-    // version, so one value covers every client this plugin instance creates.
+    // version, so one value covers every client this plugin instance builds.
     let hostVersion: string | undefined
 
     const telemetryFor = (sessionId: string): TelemetryOverrides => ({
@@ -982,7 +969,7 @@ export const createHonchoRuntimePlugin =
     }
 
     const activateRuntime = (input: Record<string, unknown> | undefined) =>
-      createActiveRuntime(pluginInput, input, { clientFor: clients.get, telemetryFor }, configPath)
+      createActiveRuntime(pluginInput, input, telemetryFor, configPath)
 
     const getState = (stateKey: string) => {
       let current = sessionStates.get(stateKey)
