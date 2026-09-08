@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Every Honcho request carries `X-Honcho-Host` and `X-Honcho-Plugin` headers (via `@honcho-ai/harness-plugin-core`) so server-side telemetry can attribute traffic to the plugin and host harness.
 - Honor `hosts.opencode.apiKey` as an override of the root `apiKey`. Setup preserves a host-scoped key instead of copying or dropping it.
 - Add `hosts.opencode.observationMode`. New installs default to `unified`; configs that omit the field stay `directional`. `honcho_chat`, `honcho_create_conclusion`, and targeted prompt recall follow the mode.
 - Prompt on upgrade (`/honcho:setup`, `/honcho:status`, `/honcho:config`, and TUI launch) to keep directional or switch to unified, and suggest `/honcho:import` after switching so local history can be reingested.

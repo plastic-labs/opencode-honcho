@@ -5,6 +5,7 @@
     "": {
       "name": "@honcho-ai/opencode-honcho",
       "dependencies": {
+        "@honcho-ai/harness-plugin-core": "^0.1.0",
         "@honcho-ai/sdk": "^2.1.1",
         "@opencode-ai/plugin": "^1.18.23",
       },
@@ -17,6 +18,8 @@
   },
   "packages": {
     "@ai-sdk/provider": ["@ai-sdk/provider@3.0.8", "", { "dependencies": { "json-schema": "^0.4.0" } }, "sha512-oGMAgGoQdBXbZqNG0Ze56CHjDZ1IDYOwGYxYjO5KLSlz5HiNQ9udIXsPZ61VWaHGZ5XW/jyjmr6t2xz2jGVwbQ=="],
+
+    "@honcho-ai/harness-plugin-core": ["@honcho-ai/harness-plugin-core@0.1.0", "", {}, "sha512-6xem7mPQMfYcXpn699BuelSOnIfugsj3kC3Mx7p4oK2xAp8PCkHyVFRkYOjSjTxDTMBowdQwCBu+494IC4xHvw=="],
 
     "@honcho-ai/sdk": ["@honcho-ai/sdk@2.1.1", "", { "dependencies": { "zod": "4.0.0" } }, "sha512-1EgDchnK2bTllhUCNhH1PZbw65fExmTtY2sraqXc1O41o1gY4Rpqrl1XCo+7RfdcZo85N7vl461hqYCouhbR1A=="],
 

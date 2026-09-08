@@ -1,7 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises"
 import path from "node:path"
 import type { TuiPlugin, TuiPluginModule } from "@opencode-ai/plugin/tui"
-import { Honcho } from "@honcho-ai/sdk"
+import { createHonchoClient } from "./honcho-client.js"
 import { executeOpenCodeImport, planOpenCodeImport } from "./import.js"
 import {
   DEFAULT_SETTINGS,
@@ -474,9 +474,9 @@ const openImportDialog = async (api: Parameters<TuiPlugin>[0]) => {
         }
         void (async () => {
           try {
-            const honcho = new Honcho({
-              apiKey: config.apiKey || undefined,
-              baseURL: config.baseUrl || undefined,
+            const honcho = createHonchoClient({
+              apiKey: config.apiKey,
+              baseUrl: config.baseUrl,
               workspaceId: config.workspaceId,
             })
             const result = await executeOpenCodeImport({

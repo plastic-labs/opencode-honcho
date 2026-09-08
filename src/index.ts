@@ -1,7 +1,8 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { tool, type Plugin, type PluginInput } from "@opencode-ai/plugin"
-import { Honcho } from "@honcho-ai/sdk"
+import type { Honcho } from "@honcho-ai/sdk"
+import { createHonchoClient, getTelemetryHeaders, PLUGIN_VERSION } from "./honcho-client.js"
 import {
   DEFAULT_SETTINGS,
   clampText,
@@ -764,9 +765,9 @@ const createActiveRuntime = async (
   configPathOverride?: string,
 ): Promise<ActiveRuntime> => {
   const handle = await deriveRuntimeHandle(pluginInput, input, configPathOverride)
-  const honcho = new Honcho({
-    apiKey: handle.config.apiKey || undefined,
-    baseURL: handle.config.baseUrl || undefined,
+  const honcho = createHonchoClient({
+    apiKey: handle.config.apiKey,
+    baseUrl: handle.config.baseUrl,
     workspaceId: handle.workspaceId,
   })
   const userPeer = await honcho.peer(handle.userPeerId, {
@@ -789,11 +790,7 @@ const validateSetupConnection = async ({
   baseUrl: string
   workspaceId: string
 }) => {
-  const honcho = new Honcho({
-    apiKey: apiKey || undefined,
-    baseURL: baseUrl || undefined,
-    workspaceId,
-  })
+  const honcho = createHonchoClient({ apiKey, baseUrl, workspaceId })
   await honcho.session(normalizeId(`setup-check:${workspaceId}`))
 }
 
@@ -1657,6 +1654,9 @@ export const createHonchoRuntimePlugin =
 
 export const HonchoRuntimePlugin = createHonchoRuntimePlugin()
 export const __testing = {
+  createHonchoClient,
+  getTelemetryHeaders,
+  pluginVersion: PLUGIN_VERSION,
   createSessionState,
   deriveUserPeerId,
   assertDistinctUserAndAgentPeers,
