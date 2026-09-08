@@ -6,8 +6,6 @@ import {
   createHonchoClient,
   createHonchoClientCache,
   telemetryIdentity,
-  HOST_ID,
-  PLUGIN_ID,
   PLUGIN_VERSION,
   type HonchoClientOptions,
   type TelemetryOverrides,
@@ -1724,12 +1722,7 @@ export const createHonchoRuntimePlugin =
 
 export const HonchoRuntimePlugin = createHonchoRuntimePlugin()
 export const __testing = {
-  createHonchoClient,
-  extractModelId,
-  hostId: HOST_ID,
-  pluginId: PLUGIN_ID,
   pluginVersion: PLUGIN_VERSION,
-  telemetryIdentity,
   createSessionState,
   deriveUserPeerId,
   assertDistinctUserAndAgentPeers,
