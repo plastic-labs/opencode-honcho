@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Inject memory through OpenCode hooks. The system prompt always carries the Honcho memory instruction; with `recallMode` `hybrid` or `context`, a stable memory snapshot is added once per session and prompt-specific recall is appended to each user turn. `tools` injects the instruction only. Recalled memory is presented as untrusted reference data.
+- Record significant tool activity (shell commands, file edits, delegated tasks) to Honcho via `tool.execute.after`. Read-only and trivial calls are skipped; shell arguments that may carry credentials are redacted down to the executable name.
+- Ship a `honcho-memory` skill and install it to `~/.config/opencode/skills/honcho-memory` (or `$OPENCODE_CONFIG_DIR/skills/honcho-memory`) on session start and after setup. An unchanged file is left untouched.
 - Every Honcho request carries `X-Honcho-Host` (OpenCode version and platform), `X-Honcho-Plugin` (plugin version), and `X-Honcho-Agent-Model` (the session's current `providerID/modelID`) headers via `@honcho-ai/harness-plugin-core`, so server-side telemetry can attribute traffic to the plugin, host harness, and agent model. `honcho_status` reports the identity being sent.
 - Update `@honcho-ai/sdk` to 2.4.0.
 - Honor `hosts.opencode.apiKey` as an override of the root `apiKey`. Setup preserves a host-scoped key instead of copying or dropping it.
