@@ -2,7 +2,16 @@ import { mkdir, readFile, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { tool, type Plugin, type PluginInput } from "@opencode-ai/plugin"
 import type { Honcho } from "@honcho-ai/sdk"
-import { createHonchoClient, getTelemetryHeaders, PLUGIN_VERSION } from "./honcho-client.js"
+import {
+  createHonchoClient,
+  createHonchoClientCache,
+  telemetryIdentity,
+  HOST_ID,
+  PLUGIN_ID,
+  PLUGIN_VERSION,
+  type HonchoClientOptions,
+  type TelemetryOverrides,
+} from "./honcho-client.js"
 import {
   DEFAULT_SETTINGS,
   clampText,
@@ -759,16 +768,23 @@ const buildPeerTopology = (handle: Pick<
 const sessionPeerAdditions = (topology: PeerTopology) =>
   Object.entries(topology.sessionPeerConfigs).map(([peerId, config]) => [peerId, config] as const)
 
+type RuntimeClientFactory = {
+  clientFor: (options: HonchoClientOptions) => Honcho
+  telemetryFor: (sessionId: string) => TelemetryOverrides
+}
+
 const createActiveRuntime = async (
   pluginInput: PluginInput,
   input: Record<string, unknown> | undefined,
+  factory: RuntimeClientFactory,
   configPathOverride?: string,
 ): Promise<ActiveRuntime> => {
   const handle = await deriveRuntimeHandle(pluginInput, input, configPathOverride)
-  const honcho = createHonchoClient({
+  const honcho = factory.clientFor({
     apiKey: handle.config.apiKey,
     baseUrl: handle.config.baseUrl,
     workspaceId: handle.workspaceId,
+    ...factory.telemetryFor(handle.sessionId),
   })
   const userPeer = await honcho.peer(handle.userPeerId, {
     configuration: { observeMe: true },
@@ -792,6 +808,18 @@ const validateSetupConnection = async ({
 }) => {
   const honcho = createHonchoClient({ apiKey, baseUrl, workspaceId })
   await honcho.session(normalizeId(`setup-check:${workspaceId}`))
+}
+
+// Reported as providerID/modelID, since a bare model id is ambiguous across providers.
+// Reads a user message or hook input (`{ model: { providerID, modelID } }`) and an
+// assistant message (`{ providerID, modelID }` at the top level).
+const extractModelId = (input: Record<string, unknown> | undefined) => {
+  const model = isRecord(input?.model) ? input.model : typeof input?.modelID === "string" ? input : null
+  if (!model) return null
+  const id = (typeof model.modelID === "string" ? model.modelID : typeof model.id === "string" ? model.id : "").trim()
+  if (!id) return null
+  const provider = typeof model.providerID === "string" ? model.providerID.trim() : ""
+  return provider ? `${provider}/${id}` : id
 }
 
 const durableConclusionCandidate = (text: string, settings: HonchoSettings) => {
@@ -926,6 +954,37 @@ export const createHonchoRuntimePlugin =
   ({ configPath }: RuntimePluginOptions = {}): Plugin =>
   async (pluginInput) => {
     const sessionStates = new Map<string, SessionState>()
+    const clients = createHonchoClientCache()
+    // session id → agent model, sent as X-Honcho-Agent-Model
+    const sessionModels = new Map<string, string>()
+    // OpenCode version, sent in X-Honcho-Host. The plugin input does not carry it; every
+    // Session object records the version that created it, and a process cannot change
+    // version, so one value covers every client this plugin instance creates.
+    let hostVersion: string | undefined
+
+    const telemetryFor = (sessionId: string): TelemetryOverrides => ({
+      hostVersion,
+      model: sessionModels.get(sessionId),
+    })
+
+    const rememberSessionModel = (sessionId: string, modelId: string | null) => {
+      if (modelId) {
+        sessionModels.set(sessionId, modelId)
+      }
+    }
+
+    // session.created always names the running version. A resumed session may carry the
+    // older version that created it, so session.updated only fills in a missing value.
+    const rememberHostVersion = (event: { type: string; properties?: unknown }) => {
+      const info = isRecord(event.properties) && isRecord(event.properties.info) ? event.properties.info : null
+      const version = typeof info?.version === "string" ? info.version.trim() : ""
+      if (version && (event.type === "session.created" || !hostVersion)) {
+        hostVersion = version
+      }
+    }
+
+    const activateRuntime = (input: Record<string, unknown> | undefined) =>
+      createActiveRuntime(pluginInput, input, { clientFor: clients.get, telemetryFor }, configPath)
 
     const getState = (stateKey: string) => {
       let current = sessionStates.get(stateKey)
@@ -963,7 +1022,7 @@ export const createHonchoRuntimePlugin =
         return fallback
       }
       try {
-        return await action(await createActiveRuntime(pluginInput, input, configPath))
+        return await action(await activateRuntime(input))
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error)
         await log("error", "Honcho runtime operation failed.", {
@@ -1014,6 +1073,7 @@ export const createHonchoRuntimePlugin =
         configured: hasConfiguredAuth(handle.config),
         localMode: isLocalBaseUrl(handle.config.baseUrl),
         baseUrl: handle.config.baseUrl,
+        telemetry: telemetryIdentity(telemetryFor(handle.sessionId)),
         peers: describePeers(handle),
         recentConclusions: state.recentConclusions,
         stableContext: state.stableContext,
@@ -1197,6 +1257,7 @@ export const createHonchoRuntimePlugin =
     return {
       event: async ({ event }) => {
         const payload = isRecord(event) ? { event, ...(isRecord(event.properties) ? event.properties : {}) } : { event }
+        rememberHostVersion(event)
         const handle = await deriveRuntimeHandle(pluginInput, payload, configPath)
         const stateKey = deriveSessionStateKey(handle)
         if (event.type === "command.executed") {
@@ -1220,6 +1281,9 @@ export const createHonchoRuntimePlugin =
           return
         }
         if (event.type === "message.updated") {
+          // The assistant message names the model that actually answered; the user message
+          // repeats the resolved model from chat.message.
+          rememberSessionModel(extractSessionId(payload), extractModelId(isRecord(event.properties.info) ? event.properties.info : undefined))
           await withRuntime(payload, async (runtime) => {
             const state = getState(deriveSessionStateKey(runtime))
             await captureCompletedAssistantRecord(runtime, state, payload, `event.${event.type}`)
@@ -1252,6 +1316,12 @@ export const createHonchoRuntimePlugin =
         output.env.HONCHO_WORKSPACE_ID = handle.workspaceId
       },
       "chat.message": async (input, output) => {
+        // output.message.model is always the resolved model; input.model is only set when
+        // the caller named one explicitly.
+        rememberSessionModel(
+          extractSessionId(input),
+          extractModelId(isRecord(output.message) ? output.message : undefined) ?? extractModelId(input),
+        )
         const message = extractText(output.parts)
         if (!message) {
           return
@@ -1613,7 +1683,7 @@ export const createHonchoRuntimePlugin =
             }
 
             try {
-              const runtime = await createActiveRuntime(pluginInput, { ...args, sessionID: context.sessionID }, configPath)
+              const runtime = await activateRuntime({ ...args, sessionID: context.sessionID })
               const content = clampText(args.content.trim(), INTERNAL_DIALECTIC_MAX_CHARS)
               const created = await maybeWriteConclusion(runtime, content, "tool.create_conclusion")
               return JSON.stringify(
@@ -1655,8 +1725,11 @@ export const createHonchoRuntimePlugin =
 export const HonchoRuntimePlugin = createHonchoRuntimePlugin()
 export const __testing = {
   createHonchoClient,
-  getTelemetryHeaders,
+  extractModelId,
+  hostId: HOST_ID,
+  pluginId: PLUGIN_ID,
   pluginVersion: PLUGIN_VERSION,
+  telemetryIdentity,
   createSessionState,
   deriveUserPeerId,
   assertDistinctUserAndAgentPeers,
