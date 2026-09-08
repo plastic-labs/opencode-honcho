@@ -3,15 +3,10 @@ import os from "node:os"
 import path from "node:path"
 import { mkdtemp, readFile } from "node:fs/promises"
 
-import { createHonchoRuntimePlugin, __testing } from "../dist/index.js"
+import { createHonchoRuntimePlugin } from "../dist/index.js"
 
 const pluginVersion = async () =>
   JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf-8")).version
-
-// The bundled dist cannot read package.json at runtime, so the constant must track it.
-test("plugin version constant matches package.json", async () => {
-  expect(__testing.pluginVersion).toBe(await pluginVersion())
-})
 
 test("every Honcho request carries host, plugin, and current agent model telemetry headers", async () => {
   const rootDir = await mkdtemp(path.join(os.tmpdir(), "honcho-telemetry-"))

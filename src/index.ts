@@ -2,7 +2,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { tool, type Plugin, type PluginInput } from "@opencode-ai/plugin"
 import type { Honcho } from "@honcho-ai/sdk"
-import { createHonchoClient, telemetryIdentity, PLUGIN_VERSION, type TelemetryOverrides } from "./honcho-client.js"
+import { createHonchoClient, telemetryIdentity, type TelemetryOverrides } from "./honcho-client.js"
 import {
   DEFAULT_SETTINGS,
   clampText,
@@ -1709,7 +1709,6 @@ export const createHonchoRuntimePlugin =
 
 export const HonchoRuntimePlugin = createHonchoRuntimePlugin()
 export const __testing = {
-  pluginVersion: PLUGIN_VERSION,
   createSessionState,
   deriveUserPeerId,
   assertDistinctUserAndAgentPeers,

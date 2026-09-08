@@ -1,6 +1,6 @@
+import { readFileSync } from "node:fs"
 import { Honcho } from "@honcho-ai/sdk"
 import { telemetryHeaders, type TelemetryIdentity } from "@honcho-ai/harness-plugin-core"
-import { PLUGIN_VERSION } from "./version.js"
 
 /** Host name sent as `X-Honcho-Host: opencode/<version> (<platform>)`. */
 export const HOST_ID = "opencode"
@@ -8,7 +8,22 @@ export const HOST_ID = "opencode"
 /** Integration name sent as `X-Honcho-Plugin: opencode-honcho/<version>`. */
 export const PLUGIN_ID = "opencode-honcho"
 
-export { PLUGIN_VERSION }
+let pluginVersion: string | undefined
+
+/**
+ * Plugin version from package.json, which sits one directory above both `src/` and the bundled
+ * `dist/`. Read lazily and guarded so a bad path can never stop the plugin from loading.
+ */
+export const getPluginVersion = (): string => {
+  if (pluginVersion) return pluginVersion
+  try {
+    const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf-8")) as { version?: unknown }
+    if (typeof pkg.version === "string" && pkg.version) return (pluginVersion = pkg.version)
+  } catch {
+    // fall through to "unknown"; the next call retries
+  }
+  return "unknown"
+}
 
 /** The identity fields only the running host knows: its version and the agent model in use. */
 export type TelemetryOverrides = Pick<TelemetryIdentity, "hostVersion" | "model">
@@ -22,7 +37,7 @@ export type HonchoClientOptions = TelemetryOverrides & {
 export const telemetryIdentity = (overrides: TelemetryOverrides = {}): TelemetryIdentity => ({
   host: HOST_ID,
   plugin: PLUGIN_ID,
-  pluginVersion: PLUGIN_VERSION,
+  pluginVersion: getPluginVersion(),
   ...(overrides.hostVersion ? { hostVersion: overrides.hostVersion } : {}),
   ...(overrides.model ? { model: overrides.model } : {}),
 })
