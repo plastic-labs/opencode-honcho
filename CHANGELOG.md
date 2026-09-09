@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.4
 
 - Inject memory through OpenCode hooks. The system prompt always carries the Honcho memory instruction; with `recallMode` `hybrid` or `context`, a stable memory snapshot is added once per session and prompt-specific recall is retrieved for user turns, then appended when new (unchanged blocks are deduplicated within the session). `tools` injects the instruction only. Recalled memory is presented as untrusted reference data.
 - Record significant tool activity (shell commands, file edits, delegated tasks) to Honcho via `tool.execute.after`. Read-only and trivial calls are skipped; shell arguments that may carry credentials are redacted down to the executable name.
