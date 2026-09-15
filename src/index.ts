@@ -85,6 +85,10 @@ type SessionState = {
   // mid-session change to the system prompt.
   systemContext: string | null
   systemContextSealed: boolean
+  // Hydration currently running for this session. Concurrent triggers share
+  // this promise instead of each starting their own hydration. Cleared in
+  // finally so a failed hydration can be retried by the next trigger.
+  stableContextHydration: Promise<boolean> | null
   cachedPromptContext: string | null
   lastInjectedContext: string | null
   recentConclusions: string[]
@@ -1060,6 +1064,7 @@ const createSessionState = (): SessionState => ({
   stableContext: null,
   systemContext: null,
   systemContextSealed: false,
+  stableContextHydration: null,
   cachedPromptContext: null,
   lastInjectedContext: null,
   recentConclusions: [],
@@ -1384,6 +1389,18 @@ export const createHonchoRuntimePlugin =
       )
     }
 
+    const ensureStableContextHydration = async (runtime: ActiveRuntime, state: SessionState) => {
+      if (state.stableContext) {
+        return true
+      }
+      if (!state.stableContextHydration) {
+        state.stableContextHydration = hydrateSessionStartContext(runtime, state).finally(() => {
+          state.stableContextHydration = null
+        })
+      }
+      return state.stableContextHydration
+    }
+
     const refreshPromptContext = async (runtime: ActiveRuntime, state: SessionState, query: string) => {
       const topicKey = deriveTopicKey(query)
       if (!shouldRefreshPromptContext(state, topicKey, INTERNAL_CONTEXT_REFRESH)) {
@@ -1458,7 +1475,7 @@ export const createHonchoRuntimePlugin =
           void ensureHonchoSkillInstalled()
           await withRuntime(payload, async (runtime) => {
             const state = getState(deriveSessionStateKey(runtime))
-            await hydrateSessionStartContext(runtime, state)
+            await ensureStableContextHydration(runtime, state)
             await log("info", "Honcho session initialized for OpenCode.", await runtimeStatus(payload))
           }, undefined)
           return
@@ -1568,7 +1585,7 @@ export const createHonchoRuntimePlugin =
         if (!state.systemContextSealed) {
           if (!state.stableContext) {
             await withRuntime(input, async (runtime) => {
-              await hydrateSessionStartContext(runtime, state)
+              await ensureStableContextHydration(runtime, state)
             }, undefined)
           }
           state.systemContext = state.stableContext ?? ""

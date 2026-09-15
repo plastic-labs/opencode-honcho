@@ -243,6 +243,78 @@ test("system transform seals the stable context on the first turn", async () => 
   }
 })
 
+test("overlapping session.created and system.transform hydrations share one dialectic fan-out", async () => {
+  const tick = () => new Promise((resolve) => setTimeout(resolve, 0))
+  const waitFor = async (predicate) => {
+    for (let i = 0; i < 50; i++) {
+      if (predicate()) return
+      await tick()
+    }
+  }
+
+  await runWithHarness(async ({ hooks, fetch }) => {
+    const chatCalls = () =>
+      fetch.calls.filter((call) => call.method === "POST" && /\/peers\/[^/]+\/chat$/.test(call.pathname))
+
+    // Defer the hydration chat responses so both triggers are guaranteed to
+    // start while the first hydration is still in flight.
+    const originalFetch = globalThis.fetch
+    const releases = []
+    globalThis.fetch = async (url, init) => {
+      const target = new URL(typeof url === "string" ? url : url.toString())
+      if (init?.method === "POST" && /\/peers\/[^/]+\/chat$/.test(target.pathname)) {
+        const started = fetch(url, init)
+        return new Promise((resolve) => releases.push(() => resolve(started)))
+      }
+      return fetch(url, init)
+    }
+    try {
+      const created = hooks.event({
+        event: { type: "session.created", properties: { sessionID: "ses-test" } },
+      })
+      await waitFor(() => chatCalls().length >= 2)
+
+      const output = { system: [] }
+      const transformed = hooks["experimental.chat.system.transform"](systemInput(), output)
+      await waitFor(() => chatCalls().length > 2 || output.system.length > 1)
+      for (let i = 0; i < 10; i++) {
+        await tick()
+      }
+
+      // Both triggers await one shared hydration (2 dialectic chat calls).
+      // Without the in-flight guard each trigger hydrates on its own
+      // (4 dialectic chat calls).
+      expect(chatCalls()).toHaveLength(2)
+      for (const release of releases.splice(0)) release()
+      await created
+      await transformed
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+})
+
+test("failed hydration is retried by the next trigger instead of cached", async () => {
+  await runWithHarness(async ({ hooks, fetch }) => {
+    const chatCalls = () =>
+      fetch.calls.filter((call) => call.method === "POST" && /\/peers\/[^/]+\/chat$/.test(call.pathname))
+
+    await hooks.event({
+      event: { type: "session.created", properties: { sessionID: "ses-test" } },
+    })
+    expect(chatCalls()).toHaveLength(2)
+
+    const output = { system: [] }
+    await hooks["experimental.chat.system.transform"](systemInput(), output)
+
+    // Hydration failed completely, so nothing stable was sealed...
+    expect(output.system).toHaveLength(1)
+    // ...but the second trigger retried instead of inheriting the failed
+    // in-flight promise.
+    expect(chatCalls()).toHaveLength(4)
+  }, { failStableHydration: true })
+})
+
 test("chat.message skips recall for trivial prompt text", async () => {
   await runWithHarness(async ({ hooks, fetch }) => {
     const chatOutput = {
