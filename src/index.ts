@@ -1295,7 +1295,8 @@ export const createHonchoRuntimePlugin =
           runtime.agentPeer,
           update.text,
           {
-            source,
+            source: "opencode",
+            event: source,
             sessionId: runtime.sessionId,
             messageId: update.messageId,
           },
@@ -1518,7 +1519,8 @@ export const createHonchoRuntimePlugin =
           const state = getState(deriveSessionStateKey(runtime))
           state.promptCount += 1
           await captureMessage(runtime, runtime.userPeer, message, {
-            source: "chat.message",
+            source: "opencode",
+            event: "chat.message",
             sessionId: runtime.sessionId,
           }, timestampToIso(output.message?.time?.created))
           const candidate = durableConclusionCandidate(message, runtime.config)
@@ -1625,7 +1627,8 @@ export const createHonchoRuntimePlugin =
             runtime.agentPeer,
             `[Tool] ${summary}`,
             {
-              source: "tool.execute.after",
+              source: "opencode",
+              event: "tool.execute.after",
               tool: input.tool,
               callID: input.callID,
               sessionId: runtime.sessionId,
