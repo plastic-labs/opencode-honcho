@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises"
 import path from "node:path"
 import type { TuiPlugin, TuiPluginModule } from "@opencode-ai/plugin/tui"
+import type { TuiContext, TuiKeymapCommand } from "./v2/types.js"
 import { createHonchoClient } from "./honcho-client.js"
 import { executeOpenCodeImport, planOpenCodeImport } from "./import.js"
 import {
@@ -824,13 +825,240 @@ const tui: TuiPlugin = async (api) => {
   void maybePromptObservationUpgrade(api)
 }
 
-const plugin: TuiPluginModule & { id: string } = {
+
+// ---------------------------------------------------------------------------
+// OpenCode 2.x CLI plugin: same five commands over the promise-based dialog API.
+// ---------------------------------------------------------------------------
+
+const alertError = (context: TuiContext, title: string, error: unknown) =>
+  context.ui.dialog.alert({ title, message: error instanceof Error ? error.message : String(error) })
+
+const runObservationUpgradeV2 = async (context: TuiContext, followUpLines: string[]) => {
+  const confirmed = await context.ui.dialog.confirm({
+    title: "New: Honcho observation mode!",
+    message:
+      "Unified: one self-collection, you can share with other unified agents (new default). Directional: keeps Honcho memory specific to your OpenCode agent.",
+    label: { confirm: "Switch to unified", cancel: "Keep directional" },
+  })
+  if (confirmed === undefined) return
+  const mode: ObservationMode = confirmed ? "unified" : "directional"
+  const configPath = await persistHostObservationMode(mode)
+  await context.ui.dialog.alert({
+    title: mode === "unified" ? "Switched to unified" : "Keeping directional",
+    message: [
+      ...followUpLines,
+      `Saved observationMode=${mode} to ${configPath}`,
+      mode === "unified" ? unifiedImportFollowUp() : directionalKeepFollowUp(),
+    ].join("\n"),
+  })
+}
+
+const maybePromptObservationUpgradeV2 = async (context: TuiContext) => {
+  try {
+    const settings = await readGlobalSettings()
+    const configured = Boolean(settings.apiKey?.trim()) || isLocalBaseUrl(settings.baseUrl || "")
+    const raw = await readSharedConfig()
+    if (!configured || !needsObservationUpgradePrompt(raw)) return
+    await runObservationUpgradeV2(context, [])
+  } catch {
+    return
+  }
+}
+
+const liveStatusV2 = (context: TuiContext, settings: GlobalSettings) => {
+  const route = context.ui.router.current()
+  const configuredWorkspace = settings.hosts?.opencode?.workspace
+  return {
+    workspaceName:
+      typeof configuredWorkspace === "string" && configuredWorkspace.trim()
+        ? configuredWorkspace.trim()
+        : path.basename(context.location?.directory || "opencode"),
+    openCodeSessionId: route.type === "session" && typeof route.sessionID === "string" ? route.sessionID : undefined,
+  }
+}
+
+const runStatusV2 = async (context: TuiContext) => {
+  const settings = await readGlobalSettings()
+  await context.ui.dialog.alert({ title: "Honcho Status", message: statusMessage(settings, liveStatusV2(context, settings)) })
+}
+
+const runSettingsV2 = async (context: TuiContext) => {
+  const settings = await readGlobalSettings()
+  await context.ui.dialog.alert({ title: "Honcho Settings", message: settingsMessage(settings) })
+}
+
+const runConfigV2 = async (context: TuiContext) => {
+  let config: Record<string, unknown> | null
+  try {
+    config = await readSharedConfig()
+  } catch (error) {
+    await alertError(context, "Honcho config invalid", error)
+    return
+  }
+  if (!config) {
+    await context.ui.dialog.alert({
+      title: "Honcho config missing",
+      message: `The config does not exist at ${sharedGlobalSettingsPath()}.`,
+    })
+    return
+  }
+  const fieldPath = await context.ui.dialog.select<string>({
+    title: "Which field should be modified?",
+    options: modeEditableFieldPaths().map((value) => ({ title: value, value })),
+  })
+  if (!fieldPath) return
+
+  const currentValue = getNestedValue(config, fieldPath)
+  const presetOptions = sharedConfigPresetOptions(fieldPath, currentValue)
+  let rawValue: string | undefined
+  if (presetOptions.length > 0) {
+    rawValue = await context.ui.dialog.select<string>({
+      title: fieldPath.endsWith("observationMode")
+        ? "Honcho observation mode"
+        : `What should it be set to: ${presetOptions.join(", ")}`,
+      options: fieldPath.endsWith("observationMode")
+        ? observationUpgradeOptions()
+        : presetOptions.map((option) => ({ title: option, value: option })),
+      current: typeof currentValue === "string" ? currentValue : undefined,
+    })
+  } else {
+    rawValue = await context.ui.dialog.prompt({
+      title: "What should it be set to:",
+      value: currentValue === undefined ? "" : String(currentValue),
+    })
+  }
+  if (rawValue === undefined) return
+
+  try {
+    const nextConfig = structuredClone(config)
+    const nextValue = parseSharedConfigValue(currentValue, rawValue)
+    setNestedValue(nextConfig, fieldPath, nextValue)
+    const configPath = await writeSharedConfig(nextConfig)
+    const importHint =
+      fieldPath.endsWith("observationMode") && nextValue === "unified" ? unifiedImportFollowUp() : null
+    await context.ui.dialog.alert({
+      title: "Honcho config updated",
+      message: [`Saved settings to ${configPath}`, `Field: ${fieldPath}`, `Value: ${String(nextValue)}`, importHint]
+        .filter((line): line is string => typeof line === "string")
+        .join("\n"),
+    })
+  } catch (error) {
+    await alertError(context, "Honcho config update failed", error)
+  }
+}
+
+const runSetupV2 = async (context: TuiContext) => {
+  const mode = await context.ui.dialog.select<"cloud" | "local">({
+    title: "Configure Honcho",
+    options: [
+      { title: "Honcho Cloud", value: "cloud", description: "Use the default Honcho Cloud endpoint" },
+      { title: "Self-hosted / local", value: "local", description: "Use a custom or localhost Honcho base URL" },
+    ],
+  })
+  if (!mode) return
+
+  let baseUrl = DEFAULT_SETTINGS.baseUrl
+  let apiKey: string | undefined
+  if (mode === "local") {
+    const entered = await context.ui.dialog.prompt({
+      title: "Honcho API base URL",
+      placeholder: "http://127.0.0.1:8000",
+      value: "http://127.0.0.1:8000",
+    })
+    if (entered === undefined) return
+    baseUrl = entered.trim() || "http://127.0.0.1:8000"
+    apiKey = await context.ui.dialog.prompt({
+      title: "Optional Honcho API key",
+      placeholder: "Leave blank for local unauthenticated mode",
+    })
+    if (apiKey === undefined) return
+  } else {
+    apiKey = await context.ui.dialog.prompt({ title: "Honcho API key", placeholder: "hch_..." })
+    if (apiKey === undefined) return
+    const validationError = validateCloudApiKey(apiKey)
+    if (validationError) {
+      await context.ui.dialog.alert({ title: "Honcho setup incomplete", message: validationError })
+      return
+    }
+  }
+
+  const current = await readGlobalSettings()
+  const peerName = await context.ui.dialog.prompt({
+    title: "Peer name",
+    placeholder: "Your Honcho peer name",
+    value: typeof current.peerName === "string" ? current.peerName : "",
+  })
+  if (peerName === undefined) return
+
+  const configPath = await saveSettings({ apiKey: apiKey.trim(), baseUrl, peerName: peerName.trim() })
+  const summary = [
+    `Saved settings to ${configPath}`,
+    `Base URL: ${baseUrl}`,
+    `API key: ${apiKey.trim() ? "set" : mode === "local" ? "not required for localhost mode" : "not set"}`,
+    `Peer name: ${peerName.trim() || "user"}`,
+  ]
+  const raw = await readSharedConfig()
+  const settings = await readGlobalSettings()
+  const configured = Boolean(settings.apiKey?.trim()) || isLocalBaseUrl(settings.baseUrl || "")
+  if (configured && needsObservationUpgradePrompt(raw)) {
+    await runObservationUpgradeV2(context, summary)
+    return
+  }
+  await context.ui.dialog.alert({ title: "Honcho configured", message: summary.join("\n") })
+}
+
+const runImportV2 = async (context: TuiContext) => {
+  await context.ui.dialog.alert({
+    title: "Honcho import",
+    message:
+      "Importing local OpenCode transcripts is not available on OpenCode 2 yet. It still works on OpenCode 1.x; a 2.x port is tracked for the next release.",
+  })
+}
+
+const buildCommandsV2 = (context: TuiContext): TuiKeymapCommand[] =>
+  [
+    { id: "honcho.setup", title: "Honcho Setup", description: "Configure Honcho Cloud or local settings for OpenCode", slash: "honcho:setup", run: () => runSetupV2(context) },
+    { id: "honcho.status", title: "Honcho Status", description: "Show Honcho runtime health for the current OpenCode session", slash: "honcho:status", run: () => runStatusV2(context) },
+    { id: "honcho.settings", title: "Honcho Settings", description: "Show effective Honcho config values for OpenCode", slash: "honcho:settings", run: () => runSettingsV2(context) },
+    { id: "honcho.config", title: "Honcho Config", description: "Edit shared Honcho config fields from ~/.honcho/config.json", slash: "honcho:config", run: () => runConfigV2(context) },
+    { id: "honcho.import", title: "Honcho Import", description: "Preview or import local OpenCode transcripts into Honcho", slash: "honcho:import", run: () => runImportV2(context) },
+  ].map(({ slash, run, ...command }) => ({
+    ...command,
+    group: "Honcho",
+    palette: true,
+    slash: { name: slash },
+    run: async () => {
+      try {
+        await run()
+      } catch (error) {
+        await alertError(context, command.title, error)
+      }
+    },
+  }))
+
+const setup = async (context: TuiContext) => {
+  // A keymap layer is owned by the component that creates it, so it has to be created inside a
+  // rendered slot rather than directly in setup (which runs outside the Solid owner tree).
+  context.ui.slot({
+    append: "app",
+    render: () => {
+      context.keymap.layer(() => ({ mode: "global", commands: buildCommandsV2(context) }))
+      return undefined
+    },
+  })
+  void maybePromptObservationUpgradeV2(context)
+}
+
+/** One default export for both generations: 1.x calls `tui()`, 2.x calls `setup()`. */
+const plugin: TuiPluginModule & { id: string; setup: typeof setup } = {
   id: PACKAGE_ID,
   tui,
+  setup,
 }
 
 export const __testing = {
   buildCommands,
+  buildCommandsV2,
   deriveLiveStatus,
   normalizeSettings,
   modeEditableFieldPaths,

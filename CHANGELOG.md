@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.0
+
+- Support OpenCode 2.x (`@opencode/cli`, `@opencode/plugin` 2.0.x) alongside 1.x from one package. The `./server` and `./tui` entries default-export `{ id, server, setup }` / `{ id, tui, setup }`: 1.x calls `server()`/`tui()`, 2.x calls `setup()`. Fixes the `Plugin must export a default definition with an id and an effect or setup function` load failure (#46).
+- Split the runtime into a host-agnostic core (`createHonchoCore`) with the 1.x hook map and the 2.x `setup` as thin adapters over it. Behaviour on 1.x is unchanged.
+- OpenCode 2.x runtime: user turns are captured from `session.hook("prompt")`; the memory instruction, stable snapshot, and prompt-specific recall are added in `session.hook("context")`; compaction continuity in `session.hook("compaction")`; tool activity via `tool.hook("execute.after")`; `HONCHO_*` shell variables via `shell.hook("create.before")`; the seven `honcho_*` tools via `tool.transform` (zod schemas are accepted as Standard Schema). Assistant replies are assembled from `session.text.ended` and written at `session.step.ended`, with a turn-boundary flush on `session.execution.*`. `X-Honcho-Host` uses `ctx.app.version`.
+- OpenCode 2.x TUI: `/honcho:setup`, `/honcho:status`, `/honcho:settings`, and `/honcho:config` use the 2.x dialog API. `/honcho:import` reports that import is 1.x-only for now.
+- Ship root `server.js` and `tui.js` shims so a local checkout or unpacked tarball loads on 2.x, which resolves plugin directories by root module rather than the `exports` map.
+- Build the bundles for the Node target so they run under both the Bun and Node OpenCode runtimes. 2.x plugin logs go to stderr, never stdout (the server may use stdout as its RPC transport).
+
 ## 0.1.4
 
 - Inject memory through OpenCode hooks. The system prompt always carries the Honcho memory instruction; with `recallMode` `hybrid` or `context`, a stable memory snapshot is added once per session and prompt-specific recall is retrieved for user turns, then appended when new (unchanged blocks are deduplicated within the session). `tools` injects the instruction only. Recalled memory is presented as untrusted reference data.
