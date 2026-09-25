@@ -236,12 +236,10 @@ export const transcriptSourceFromV2Client = (client: OpenCodeClientV2): Transcri
           ? { cursor, limit: V2_PAGE_SIZE }
           : { order: "desc", limit: V2_PAGE_SIZE, ...(includeSubagents ? {} : { parentID: null }) },
       )
-      let reachedWindowStart = false
+      // Filter rather than stop early: the list order and `time.updated` have drifted apart in
+      // some 2.x builds, and listing is cheap next to reading transcripts.
       for (const session of page.data) {
-        if (session.time.updated < start) {
-          reachedWindowStart = true
-          break
-        }
+        if (session.time.updated < start) continue
         sessions.push({
           id: session.id,
           title: session.title || session.id,
@@ -249,7 +247,7 @@ export const transcriptSourceFromV2Client = (client: OpenCodeClientV2): Transcri
           timeUpdated: session.time.updated,
         })
       }
-      if (reachedWindowStart || page.data.length < V2_PAGE_SIZE || !page.cursor.next) return sessions
+      if (page.data.length < V2_PAGE_SIZE || !page.cursor.next) return sessions
       cursor = page.cursor.next
     }
   },

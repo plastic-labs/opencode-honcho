@@ -35,18 +35,24 @@ const consoleHost = (directory: string, worktree: string | undefined): HostAdapt
   },
 })
 
-// One live runtime per process. OpenCode hot-reloads plugins by running the old generation's
-// cleanup and then the new setup; a stale event loop must not keep capturing after that.
+// One live runtime per plugin location. OpenCode 2 instantiates the plugin once per location and
+// hot-reloads it by running the old generation's cleanup and then the new setup; a stale event
+// loop must not keep capturing after that, while other locations keep running untouched.
 const OWNER = Symbol.for("@honcho-ai/opencode-honcho.v2.generation")
-const nextGeneration = () => {
-  const g = globalThis as Record<symbol, number>
-  g[OWNER] = (g[OWNER] ?? 0) + 1
-  return g[OWNER]
+const generations = (): Map<string, number> => {
+  const g = globalThis as Record<symbol, Map<string, number> | undefined>
+  return (g[OWNER] ??= new Map())
 }
-const isCurrentGeneration = (generation: number) => (globalThis as Record<symbol, number>)[OWNER] === generation
+const nextGeneration = (location: string) => {
+  const next = (generations().get(location) ?? 0) + 1
+  generations().set(location, next)
+  return next
+}
+const isCurrentGeneration = (location: string, generation: number) => generations().get(location) === generation
 
 export const setup = async (ctx: PluginContext) => {
-  const generation = nextGeneration()
+  const location = ctx.location.directory
+  const generation = nextGeneration(location)
   const configPath = typeof ctx.options?.configPath === "string" ? ctx.options.configPath : undefined
   const core = createHonchoCore(consoleHost(ctx.location.directory, ctx.location.project?.directory), configPath)
   core.setHostVersion(ctx.app.version)
@@ -146,6 +152,7 @@ export const setup = async (ctx: PluginContext) => {
         return
       }
       case "session.deleted": {
+        pendingRecall.delete(sessionID)
         await core.dropSessionState({ sessionID })
         return
       }
@@ -167,7 +174,7 @@ export const setup = async (ctx: PluginContext) => {
   void (async () => {
     try {
       for await (const event of ctx.event.subscribe({ signal: controller.signal })) {
-        if (!isCurrentGeneration(generation)) break
+        if (!isCurrentGeneration(location, generation)) break
         try {
           await handleEvent(event)
         } catch (error) {

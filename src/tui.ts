@@ -836,6 +836,7 @@ const tui: TuiPlugin = async (api) => {
 const alertError = (context: TuiContext, title: string, error: unknown) =>
   context.ui.dialog.alert({ title, message: error instanceof Error ? error.message : String(error) })
 
+/** Returns false when the dialog was dismissed without choosing, so callers can still confirm what was saved. */
 const runObservationUpgradeV2 = async (context: TuiContext, followUpLines: string[]) => {
   const confirmed = await context.ui.dialog.confirm({
     title: "New: Honcho observation mode!",
@@ -843,7 +844,7 @@ const runObservationUpgradeV2 = async (context: TuiContext, followUpLines: strin
       "Unified: one self-collection, you can share with other unified agents (new default). Directional: keeps Honcho memory specific to your OpenCode agent.",
     label: { confirm: "Switch to unified", cancel: "Keep directional" },
   })
-  if (confirmed === undefined) return
+  if (confirmed === undefined) return false
   const mode: ObservationMode = confirmed ? "unified" : "directional"
   const configPath = await persistHostObservationMode(mode)
   await context.ui.dialog.alert({
@@ -854,6 +855,7 @@ const runObservationUpgradeV2 = async (context: TuiContext, followUpLines: strin
       mode === "unified" ? unifiedImportFollowUp() : directionalKeepFollowUp(),
     ].join("\n"),
   })
+  return true
 }
 
 const maybePromptObservationUpgradeV2 = async (context: TuiContext) => {
@@ -1003,10 +1005,7 @@ const runSetupV2 = async (context: TuiContext) => {
   const raw = await readSharedConfig()
   const settings = await readGlobalSettings()
   const configured = Boolean(settings.apiKey?.trim()) || isLocalBaseUrl(settings.baseUrl || "")
-  if (configured && needsObservationUpgradePrompt(raw)) {
-    await runObservationUpgradeV2(context, summary)
-    return
-  }
+  if (configured && needsObservationUpgradePrompt(raw) && (await runObservationUpgradeV2(context, summary))) return
   await context.ui.dialog.alert({ title: "Honcho configured", message: summary.join("\n") })
 }
 
