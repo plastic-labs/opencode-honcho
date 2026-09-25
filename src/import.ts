@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises"
 import path from "node:path"
 import type { TuiPlugin } from "@opencode-ai/plugin/tui"
+import type { Plugin as TuiPluginV2 } from "@opencode/plugin/tui"
 import { Honcho } from "@honcho-ai/sdk"
 import {
   SHARED_SETTINGS_DIR_NAME,
@@ -14,12 +15,30 @@ import {
   type SessionStrategy,
 } from "./core.js"
 
+/** OpenCode 1.x SDK client, as handed to the TUI plugin. */
 export type OpenCodeClient = Parameters<TuiPlugin>[0]["client"]
 type SessionListResult = Awaited<ReturnType<OpenCodeClient["session"]["list"]>>
 type MessagesResult = Awaited<ReturnType<OpenCodeClient["session"]["messages"]>>
 export type OpenCodeSession = NonNullable<SessionListResult["data"]>[number]
 export type OpenCodeMessagePage = NonNullable<MessagesResult["data"]>
 export type OpenCodePart = OpenCodeMessagePage[number]["parts"][number]
+
+/** OpenCode 2.x client, as handed to the 2.x TUI plugin. */
+export type OpenCodeClientV2 = TuiPluginV2.Context["client"]
+
+/** One local OpenCode session as the importer sees it, independent of the OpenCode generation. */
+export type TranscriptSession = {
+  id: string
+  title: string
+  directory: string
+  timeUpdated: number
+}
+
+/** Where transcripts come from. One adapter per OpenCode generation. */
+export type TranscriptSource = {
+  listSessions: (days: number, includeSubagents: boolean) => Promise<TranscriptSession[]>
+  readTranscript: (sessionID: string) => Promise<ImportMessage[]>
+}
 
 export type ImportMessage = {
   role: "user" | "assistant"
@@ -154,7 +173,7 @@ const listOpenCodeSessions = async (
   client: OpenCodeClient,
   days: number,
   includeSubagents: boolean,
-): Promise<OpenCodeSession[]> => {
+): Promise<TranscriptSession[]> => {
   // session.list is scoped to one project (chosen by `directory`), so walk every
   // known project and ask for all of its sessions regardless of sub-directory.
   const projects = unwrap(await client.project.list(), "project.list")
@@ -178,7 +197,9 @@ const listOpenCodeSessions = async (
       sessions.push(session)
     }
   }
-  return sessions.sort((left, right) => right.time.updated - left.time.updated)
+  return sessions
+    .sort((left, right) => right.time.updated - left.time.updated)
+    .map((session) => ({ id: session.id, title: session.title, directory: session.directory, timeUpdated: session.time.updated }))
 }
 
 const readSessionTranscript = async (client: OpenCodeClient, sessionID: string): Promise<ImportMessage[]> => {
@@ -192,8 +213,82 @@ const readSessionTranscript = async (client: OpenCodeClient, sessionID: string):
   return extractImportMessages(ordered)
 }
 
+export const transcriptSourceFromV1Client = (client: OpenCodeClient): TranscriptSource => ({
+  listSessions: (days, includeSubagents) => listOpenCodeSessions(client, days, includeSubagents),
+  readTranscript: (sessionID) => readSessionTranscript(client, sessionID),
+})
+
+const V2_PAGE_SIZE = 200
+
+/**
+ * OpenCode 2.x keeps every session in one store. Listing without `directory` or `project`
+ * returns all of them, newest-updated first, so one paged walk replaces the 1.x per-project loop.
+ */
+export const transcriptSourceFromV2Client = (client: OpenCodeClientV2): TranscriptSource => ({
+  listSessions: async (days, includeSubagents) => {
+    const start = Date.now() - days * 24 * 60 * 60 * 1000
+    const sessions: TranscriptSession[] = []
+    let cursor: string | undefined
+    for (;;) {
+      // A cursor carries the original filters; the server ignores the rest of the query when one is given.
+      const page = await client.session.list(
+        cursor
+          ? { cursor, limit: V2_PAGE_SIZE }
+          : { order: "desc", limit: V2_PAGE_SIZE, ...(includeSubagents ? {} : { parentID: null }) },
+      )
+      let reachedWindowStart = false
+      for (const session of page.data) {
+        if (session.time.updated < start) {
+          reachedWindowStart = true
+          break
+        }
+        sessions.push({
+          id: session.id,
+          title: session.title || session.id,
+          directory: session.location.directory,
+          timeUpdated: session.time.updated,
+        })
+      }
+      if (reachedWindowStart || page.data.length < V2_PAGE_SIZE || !page.cursor.next) return sessions
+      cursor = page.cursor.next
+    }
+  },
+  readTranscript: async (sessionID) => {
+    const messages: ImportMessage[] = []
+    let cursor: string | undefined
+    for (;;) {
+      // `order` and `cursor` are mutually exclusive; the cursor remembers the order.
+      const page = await client.message.list(
+        cursor ? { sessionID, cursor, limit: V2_PAGE_SIZE } : { sessionID, order: "asc", limit: V2_PAGE_SIZE },
+      )
+      for (const message of page.data) {
+        const text =
+          message.type === "user"
+            ? message.text
+            : message.type === "assistant"
+              ? message.content
+                  .map((part) => (part.type === "text" ? part.text.trim() : ""))
+                  .filter(Boolean)
+                  .join("\n")
+              : ""
+        const content = clampText(text.trim(), MAX_IMPORT_MESSAGE_CHARS)
+        if (!content) continue
+        messages.push({
+          role: message.type === "user" ? "user" : "assistant",
+          content,
+          createdAt: timestampToIso(message.time.created),
+        })
+      }
+      if (page.data.length < V2_PAGE_SIZE || !page.cursor.next) return messages
+      cursor = page.cursor.next
+    }
+  },
+})
+
 export type PlanImportOptions = {
-  client: OpenCodeClient
+  /** OpenCode 1.x client. Ignored when `source` is given. */
+  client?: OpenCodeClient
+  source?: TranscriptSource
   workspaceId: string
   sessionStrategy: SessionStrategy
   agentPeerId: string
@@ -208,13 +303,16 @@ export const planOpenCodeImport = async (options: PlanImportOptions): Promise<Im
   const statePath = options.statePath || defaultImportStatePath()
   const days = options.days && options.days > 0 ? options.days : 30
 
+  const source = options.source ?? (options.client ? transcriptSourceFromV1Client(options.client) : undefined)
+  if (!source) throw new Error("OpenCode import needs a transcript source")
+
   const state = await loadImportState(statePath)
-  const rows = await listOpenCodeSessions(options.client, days, options.includeSubagents === true)
+  const rows = await source.listSessions(days, options.includeSubagents === true)
   const sessions: PlannedImportSession[] = []
 
   for (const row of rows) {
-    const messages = await readSessionTranscript(options.client, row.id)
-    const alreadyImported = state.imported[importStateKey(options.workspaceId, row.id)] === row.time.updated
+    const messages = await source.readTranscript(row.id)
+    const alreadyImported = state.imported[importStateKey(options.workspaceId, row.id)] === row.timeUpdated
     const skippedReason =
       messages.length === 0 ? "no text messages" : alreadyImported && !options.force ? "already imported" : undefined
     sessions.push({
@@ -228,7 +326,7 @@ export const planOpenCodeImport = async (options: PlanImportOptions): Promise<Im
         sessionId: row.id,
         agentPeerId: options.agentPeerId,
       }),
-      timeUpdated: row.time.updated,
+      timeUpdated: row.timeUpdated,
       messageCount: messages.length,
       alreadyImported,
       skippedReason,

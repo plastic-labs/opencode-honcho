@@ -32,7 +32,7 @@ To update an existing install, run `opencode plugin update` (2.x) or `opencode p
 
 If you edit the config by hand instead, the key is `plugins` on 2.x and `plugin` on 1.x, both taking `"@honcho-ai/opencode-honcho"` as an entry.
 
-Existing installs keep **directional** observation until you choose. After updating, OpenCode prompts you to keep directional or switch to unified (also via `/honcho:setup` or `/honcho:config`). If you switch to unified, you can optionally run `/honcho:import` (OpenCode 1.x only) to reingest local OpenCode transcripts into the new collection.
+Existing installs keep **directional** observation until you choose. After updating, OpenCode prompts you to keep directional or switch to unified (also via `/honcho:setup` or `/honcho:config`). If you switch to unified, you can optionally run `/honcho:import` to reingest local OpenCode transcripts into the new collection.
 
 This command expects the `opencode` CLI to already be installed and available on your `PATH`.
 If your shell cannot find `opencode`, restart your shell or source your shell config and run the command again.
@@ -45,7 +45,7 @@ If your shell cannot find `opencode`, restart your shell or source your shell co
 4. Enter your Honcho API key
 5. Enter your `peerName`
 6. Run `/honcho:status` to verify the runtime
-7. If you are upgrading an existing install, choose directional vs unified when prompted. After switching to unified, optionally run `/honcho:import` (OpenCode 1.x only) to backfill local history
+7. If you are upgrading an existing install, choose directional vs unified when prompted. After switching to unified, optionally run `/honcho:import` to backfill local history
 
 ## What You Get
 
@@ -123,14 +123,14 @@ If OpenCode is running in Docker or another remote environment, `localhost` may 
 
 ### Observation Mode
 
-Controls which Honcho collection `honcho_chat`, `honcho_create_conclusion`, and targeted prompt recall use for the user. This is independent of `agentObserveMe` (whether the agent peer is modeled). Changing modes does not migrate existing conclusions — use `/honcho:import` (OpenCode 1.x only) to backfill local OpenCode transcripts so Honcho can derive into the new collection.
+Controls which Honcho collection `honcho_chat`, `honcho_create_conclusion`, and targeted prompt recall use for the user. This is independent of `agentObserveMe` (whether the agent peer is modeled). Changing modes does not migrate existing conclusions — use `/honcho:import` to backfill local OpenCode transcripts so Honcho can derive into the new collection.
 
 | Mode | Collection | Best for |
 | --- | --- | --- |
 | `unified` (default on new installs) | The user's self-collection (`observer=user`, `observed=user`) | Shared workspaces where multiple agents should recall each other's conclusions about the user |
 | `directional` (existing installs until set) | This AI peer's view of the user (`observer=aiPeer`, `observed=user`) | Isolated per-agent memory; previous OpenCode behavior |
 
-New `~/.honcho/config.json` files stamp `observationMode: "unified"`. Configs that predate the field keep **directional** so an upgrade does not orphan already-derived memory. After updating, OpenCode prompts you to keep directional or switch to unified (`/honcho:setup`, `/honcho:config`, or the TUI launch dialog). If you switch, optionally run `/honcho:import` (OpenCode 1.x only) to reingest local OpenCode transcripts:
+New `~/.honcho/config.json` files stamp `observationMode: "unified"`. Configs that predate the field keep **directional** so an upgrade does not orphan already-derived memory. After updating, OpenCode prompts you to keep directional or switch to unified (`/honcho:setup`, `/honcho:config`, or the TUI launch dialog). If you switch, optionally run `/honcho:import` to reingest local OpenCode transcripts:
 
 ```json
 {
@@ -164,7 +164,7 @@ The root agent peer is created with `observeMe: false` by default: Honcho models
 | `/honcho:status` | Show effective Honcho status for the current OpenCode project, including live workspace and session names when available |
 | `/honcho:settings` | Show effective config values and config paths |
 | `/honcho:config` | Edit shared Honcho fields in `~/.honcho/config.json` |
-| `/honcho:import` | Preview or import your local OpenCode session history into Honcho (OpenCode 1.x only for now) |
+| `/honcho:import` | Preview or import your local OpenCode session history into Honcho |
 
 ### Importing local history
 
@@ -235,5 +235,3 @@ On OpenCode 2.x, `opencode plugin add` only accepts npm or Git package specifier
 ```
 
 OpenCode 2.x resolves a local plugin directory by its root `server` and `tui` modules rather than the `exports` map, so the checkout ships `server.js` and `tui.js` shims that re-export `dist/`. Run `bun run build` before starting OpenCode. To test the packed tarball on 2.x, unpack it and point `plugins` at the unpacked directory; `plugin add` does not take tarballs. Plugin logs go to stderr on 2.x (`opencode run --standalone --print-logs`) and to OpenCode's log under `service=opencode-honcho` on 1.x.
-
-`/honcho:import` is available on OpenCode 1.x only for now.

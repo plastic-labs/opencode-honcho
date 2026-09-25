@@ -6,7 +6,7 @@ import type { KeymapCommand as TuiKeymapCommand } from "@opencode/plugin/tui/con
 
 type TuiContext = PluginV2.Context
 import { createHonchoClient } from "./honcho-client.js"
-import { executeOpenCodeImport, planOpenCodeImport } from "./import.js"
+import { executeOpenCodeImport, planOpenCodeImport, transcriptSourceFromV2Client } from "./import.js"
 import {
   DEFAULT_SETTINGS,
   SETTING_ENUMS,
@@ -1011,10 +1011,55 @@ const runSetupV2 = async (context: TuiContext) => {
 }
 
 const runImportV2 = async (context: TuiContext) => {
+  const settings = await readGlobalSettings()
+  const configured = Boolean(settings.apiKey?.trim()) || isLocalBaseUrl(settings.baseUrl || "")
+  if (!configured) {
+    await context.ui.dialog.alert({ title: "Honcho import", message: "Run /honcho:setup before importing local OpenCode transcripts." })
+    return
+  }
+
+  const config = importConfigFromSettings(settings)
+  const source = transcriptSourceFromV2Client(context.client)
+  const plan = await planOpenCodeImport({
+    source,
+    workspaceId: config.workspaceId,
+    sessionStrategy: config.sessionStrategy,
+    agentPeerId: config.agentPeerId,
+  })
+  const preview = formatImportPreview(plan)
+  if (plan.sessionCount === 0) {
+    await context.ui.dialog.alert({ title: "Honcho import", message: `${preview}\n\nNothing new to import.` })
+    return
+  }
+
+  const choice = await context.ui.dialog.select<"preview" | "upload">({
+    title: "Import local OpenCode transcripts into Honcho?",
+    options: [
+      { title: "Preview only", value: "preview", description: "Do not upload" },
+      { title: "Upload now", value: "upload", description: "Sends conversation content to Honcho" },
+    ],
+  })
+  if (choice !== "upload") {
+    if (choice === "preview") await context.ui.dialog.alert({ title: "Honcho import preview", message: preview })
+    return
+  }
+
+  const honcho = createHonchoClient({ apiKey: config.apiKey, baseUrl: config.baseUrl, workspaceId: config.workspaceId })
+  const result = await executeOpenCodeImport({
+    source,
+    workspaceId: config.workspaceId,
+    sessionStrategy: config.sessionStrategy,
+    agentPeerId: config.agentPeerId,
+    honcho,
+    userPeerId: config.userPeerId,
+    agentObserveMe: config.agentObserveMe,
+  })
   await context.ui.dialog.alert({
     title: "Honcho import",
-    message:
-      "Importing local OpenCode transcripts is not available on OpenCode 2 yet. It still works on OpenCode 1.x; a 2.x port is tracked for the next release.",
+    message: [
+      `Imported ${result.uploadedMessages} message(s) across ${result.uploadedSessions} session(s) into ${config.workspaceId}.`,
+      result.errors.length > 0 ? `${result.errors.length} session(s) failed.` : "Honcho will reason over them; no restart needed.",
+    ].join("\n"),
   })
 }
 

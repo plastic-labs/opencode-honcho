@@ -3,7 +3,7 @@ import os from "node:os"
 import path from "node:path"
 import { mkdtemp } from "node:fs/promises"
 
-import { planOpenCodeImport } from "../dist/import.js"
+import { planOpenCodeImport, transcriptSourceFromV2Client } from "../dist/import.js"
 
 test("import walks every project with scope=project and reads whole transcripts in order", async () => {
   const now = Date.now()
@@ -45,6 +45,56 @@ test("import walks every project with scope=project and reads whole transcripts 
   expect(calls[0]).toMatchObject({ scope: "project", roots: true, limit: expect.any(Number) })
   expect(calls[0].start).toBeGreaterThan(now - 8 * 86_400_000)
   expect(calls[2]).toEqual({ sessionID: "a" })
+  expect(plan.sessions[0].messages).toEqual([
+    { role: "user", content: "hello", createdAt: new Date(now).toISOString() },
+    { role: "assistant", content: "hi back", createdAt: new Date(now + 1).toISOString() },
+  ])
+})
+
+test("v2 source pages sessions newest-first until the window, then reads transcripts oldest-first", async () => {
+  const now = Date.now()
+  const dir = await mkdtemp(path.join(os.tmpdir(), "honcho-import-v2-"))
+  const calls = []
+  const session = (id, updated, extra = {}) => ({ id, title: `S${id}`, projectID: "p", location: { directory: dir }, time: { created: updated, updated }, ...extra })
+  const client = {
+    session: {
+      list: async (params) => {
+        calls.push(params)
+        return params.cursor
+          ? { data: [session("old", now - 40 * 86_400_000)], cursor: {} } // outside the 7 day window: stop
+          : { data: Array.from({ length: 200 }, (_, i) => session(`s${i}`, now - i)), cursor: { next: "c1" } }
+      },
+    },
+    message: {
+      list: async (params) => {
+        calls.push(params)
+        return {
+          data: [
+            { id: "m1", type: "user", text: " hello ", time: { created: now } },
+            { id: "m2", type: "assistant", content: [{ type: "reasoning", text: "x" }, { type: "text", text: "hi back" }], time: { created: now + 1 } },
+            { id: "m3", type: "assistant", content: [{ type: "tool", name: "read" }], time: { created: now + 2 } },
+            { id: "m4", type: "compaction", time: { created: now + 3 } },
+          ],
+          cursor: {},
+        }
+      },
+    },
+  }
+
+  const plan = await planOpenCodeImport({
+    source: transcriptSourceFromV2Client(client),
+    workspaceId: "ws",
+    sessionStrategy: "per-session",
+    agentPeerId: "opencode",
+    statePath: path.join(dir, "state.json"),
+    days: 7,
+    includeMessages: true,
+  })
+
+  expect(calls[0]).toEqual({ order: "desc", limit: 200, parentID: null })
+  expect(calls[1]).toEqual({ cursor: "c1", limit: 200 })
+  expect(calls[2]).toEqual({ sessionID: "s0", order: "asc", limit: 200 })
+  expect(plan.sessions).toHaveLength(200)
   expect(plan.sessions[0].messages).toEqual([
     { role: "user", content: "hello", createdAt: new Date(now).toISOString() },
     { role: "assistant", content: "hi back", createdAt: new Date(now + 1).toISOString() },
