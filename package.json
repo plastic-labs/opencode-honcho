@@ -43,10 +43,11 @@
   "dependencies": {
     "@honcho-ai/harness-plugin-core": "^0.1.0",
     "@honcho-ai/sdk": "^2.4.0",
-    "@opencode-ai/plugin": "^1.18.23"
+    "@opencode/plugin": "^2.0.16",
+    "zod": "^4.1.8"
   },
   "devDependencies": {
-    "@opencode/plugin": "2.0.16",
+    "@opencode-ai/plugin": "^1.18.23",
     "@types/bun": "^1.2.8",
     "@types/node": "^22.13.9",
     "typescript": "^5.9.3"

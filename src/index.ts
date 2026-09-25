@@ -2,7 +2,8 @@ import { mkdir, readFile, writeFile } from "node:fs/promises"
 import { randomBytes } from "node:crypto"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
-import { tool, type Plugin, type PluginInput } from "@opencode-ai/plugin"
+import type { Plugin, PluginInput, tool } from "@opencode-ai/plugin"
+import { z } from "zod"
 import type { Honcho } from "@honcho-ai/sdk"
 import { createHonchoClient, telemetryIdentity, type TelemetryOverrides } from "./honcho-client.js"
 import {
@@ -1675,7 +1676,7 @@ export const createHonchoCore = (host: HostAdapter, configPath?: string) => {
       {
         name: "honcho_get_config",
         description: "Get the persisted and effective OpenCode Honcho settings, including workspace, peers, and session mapping.",
-        args: { field: tool.schema.string().optional() },
+        args: { field: z.string().optional() },
         async execute(args, sessionID) {
           const status = await runtimeStatus({ ...args, sessionID })
           const field = typeof args.field === "string" ? args.field : ""
@@ -1690,11 +1691,11 @@ export const createHonchoCore = (host: HostAdapter, configPath?: string) => {
         description:
           "Validate Honcho setup for OpenCode and persist shared Honcho credentials or a localhost baseUrl to ~/.honcho/config.json when provided. On upgrades where observationMode is unset, relay observationModeNotice and ask the user to keep directional or switch to unified before calling honcho_set_config. If they choose unified, mention /honcho:import.",
         args: {
-          apiKey: tool.schema.string().optional(),
-          baseUrl: tool.schema.string().optional(),
-          peerName: tool.schema.string().optional(),
-          persistGlobal: tool.schema.boolean().optional(),
-          observationMode: tool.schema.string().optional(),
+          apiKey: z.string().optional(),
+          baseUrl: z.string().optional(),
+          peerName: z.string().optional(),
+          persistGlobal: z.boolean().optional(),
+          observationMode: z.string().optional(),
         },
         async execute(args, sessionID) {
           let resolvedGlobalConfigPath = sharedGlobalSettingsPath()
@@ -1822,9 +1823,9 @@ export const createHonchoCore = (host: HostAdapter, configPath?: string) => {
         name: "honcho_set_config",
         description: "Persist a Honcho setting to ~/.honcho/config.json for future OpenCode sessions.",
         args: {
-          field: tool.schema.string(),
-          value: tool.schema.string(),
-          confirm: tool.schema.boolean().optional(),
+          field: z.string(),
+          value: z.string(),
+          confirm: z.boolean().optional(),
         },
         async execute(args, sessionID) {
           const handle = await deriveRuntimeHandle(host, { sessionID }, configPath)
@@ -1865,8 +1866,8 @@ export const createHonchoCore = (host: HostAdapter, configPath?: string) => {
         name: "honcho_search",
         description: "Search Honcho session messages for this OpenCode project using the derived workspace and session mapping.",
         args: {
-          query: tool.schema.string(),
-          max_items: tool.schema.number().optional(),
+          query: z.string(),
+          max_items: z.number().optional(),
         },
         async execute(args, sessionID) {
           const query = String(args.query ?? "")
@@ -1898,7 +1899,7 @@ export const createHonchoCore = (host: HostAdapter, configPath?: string) => {
         name: "honcho_chat",
         description:
           "Ask Honcho for a reasoning-backed answer about this project using the current peer and session mapping. In unified observationMode this queries the user's self-collection (shared with other unified agents in the workspace); in directional it queries this AI peer's view of the user.",
-        args: { query: tool.schema.string() },
+        args: { query: z.string() },
         async execute(args, sessionID) {
           const question = String(args.query ?? "")
           return JSON.stringify(
@@ -1926,7 +1927,7 @@ export const createHonchoCore = (host: HostAdapter, configPath?: string) => {
       {
         name: "honcho_create_conclusion",
         description: "Create a durable Honcho memory for this OpenCode project using the current peer and session mapping.",
-        args: { content: tool.schema.string() },
+        args: { content: z.string() },
         async execute(args, sessionID) {
           const handle = await deriveRuntimeHandle(host, { ...args, sessionID }, configPath)
           if (!hasConfiguredAuth(handle.config)) {
@@ -2008,7 +2009,7 @@ export type HonchoCore = ReturnType<typeof createHonchoCore>
 export type HonchoToolSpec = {
   name: string
   description: string
-  // zod shapes from `tool.schema`; zod 4 implements Standard Schema, which OpenCode v2 accepts directly.
+  // zod field shapes. OpenCode 1.x takes them as `args`; 2.x accepts `z.object(args)` as a Standard Schema.
   args: Parameters<typeof tool>[0]["args"]
   execute: (args: Record<string, unknown>, sessionID: string) => Promise<string>
 }
@@ -2124,13 +2125,13 @@ export const createHonchoRuntimePlugin =
       tool: Object.fromEntries(
         core.toolSpecs.map((spec) => [
           spec.name,
-          tool({
+          {
             description: spec.description,
             args: spec.args,
-            async execute(args, context) {
+            async execute(args: unknown, context: { sessionID: string }) {
               return spec.execute(args as Record<string, unknown>, context.sessionID)
             },
-          }),
+          } satisfies Parameters<typeof tool>[0],
         ]),
       ),
     }

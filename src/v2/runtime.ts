@@ -1,4 +1,4 @@
-import { tool } from "@opencode-ai/plugin"
+import { z } from "zod"
 import { createHonchoCore, ensureHonchoSkillInstalled, type HostAdapter, type HostLogLevel } from "../index.js"
 import { isRecord, timestampToIso } from "../core.js"
 import type { Model, Plugin } from "@opencode/plugin"
@@ -94,7 +94,7 @@ export const setup = async (ctx: PluginContext) => {
       editor.add({
         name: spec.name,
         description: spec.description,
-        input: tool.schema.object(spec.args),
+        input: z.object(spec.args),
         options: { codemode: false },
         execute: async (input, context) => ({
           content: await spec.execute(isRecord(input) ? input : {}, context.sessionID),
