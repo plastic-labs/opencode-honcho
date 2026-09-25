@@ -1,7 +1,10 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises"
 import path from "node:path"
 import type { TuiPlugin, TuiPluginModule } from "@opencode-ai/plugin/tui"
-import type { TuiContext, TuiKeymapCommand } from "./v2/types.js"
+import type { Plugin as PluginV2 } from "@opencode/plugin/tui"
+import type { KeymapCommand as TuiKeymapCommand } from "@opencode/plugin/tui/context"
+
+type TuiContext = PluginV2.Context
 import { createHonchoClient } from "./honcho-client.js"
 import { executeOpenCodeImport, planOpenCodeImport } from "./import.js"
 import {

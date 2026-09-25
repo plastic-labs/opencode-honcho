@@ -1,7 +1,13 @@
 import { tool } from "@opencode-ai/plugin"
 import { createHonchoCore, ensureHonchoSkillInstalled, type HostAdapter, type HostLogLevel } from "../index.js"
 import { isRecord, timestampToIso } from "../core.js"
-import type { ModelRef, PluginContext, PluginDefinition, V2Event } from "./types.js"
+import type { Model, Plugin } from "@opencode/plugin"
+
+type ModelRef = Model.Ref
+type PluginContext = Plugin.Context
+type PluginDefinition = Plugin.Plugin
+/** One event from `ctx.event.subscribe()`. */
+type V2Event = ReturnType<PluginContext["event"]["subscribe"]> extends AsyncIterable<infer E> ? E : never
 
 export const PLUGIN_ID = "@honcho-ai/opencode-honcho"
 
@@ -11,7 +17,10 @@ const modelId = (model: ModelRef | undefined) => {
   return provider ? `${provider}/${model.id.trim()}` : model.id.trim()
 }
 
-const eventData = (event: V2Event) => (isRecord(event.data) ? event.data : {})
+const eventData = (event: V2Event): Record<string, unknown> => {
+  const data: unknown = event.data
+  return isRecord(data) ? data : {}
+}
 const str = (value: unknown) => (typeof value === "string" && value ? value : null)
 
 /**
