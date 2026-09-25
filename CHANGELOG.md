@@ -7,7 +7,7 @@
 - OpenCode 2.x runtime: user turns are captured from `session.hook("prompt")`; the memory instruction, stable snapshot, and prompt-specific recall are added in `session.hook("context")`; compaction continuity in `session.hook("compaction")`; tool activity via `tool.hook("execute.after")`; `HONCHO_*` shell variables via `shell.hook("create.before")`; the seven `honcho_*` tools via `tool.transform` (zod schemas are accepted as Standard Schema). Assistant replies are assembled from `session.text.ended` and written at `session.step.ended`, with a turn-boundary flush on `session.execution.*`. `X-Honcho-Host` uses `ctx.app.version`.
 - OpenCode 2.x TUI: `/honcho:setup`, `/honcho:status`, `/honcho:settings`, and `/honcho:config` use the 2.x dialog API. `/honcho:import` reports that import is 1.x-only for now.
 - Ship root `server.js` and `tui.js` shims so a local checkout or unpacked tarball loads on 2.x, which resolves plugin directories by root module rather than the `exports` map.
-- Build the bundles for the Node target so they run under both the Bun and Node OpenCode runtimes. 2.x plugin logs go to stderr, never stdout (the server may use stdout as its RPC transport).
+- The 2.x adapters are typed against `@opencode/plugin` (a devDependency; every import is type-only, so nothing from it is bundled or loaded at runtime). Build the bundles for the Node target so they run under both the Bun and Node OpenCode runtimes. 2.x plugin logs go to stderr, never stdout (the server may use stdout as its RPC transport).
 
 ## 0.1.4
 
