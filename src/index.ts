@@ -20,6 +20,7 @@ import {
   observationUpgradeNotice,
   resolveSessionPeerIds,
   SETTING_ENUMS,
+  sharedConfigPath,
   sharedGlobalSettingsPath,
   stampedHostObservationMode,
   timestampToIso,
@@ -742,9 +743,6 @@ const deriveProjectRoot = (pluginInput: PluginInput) => {
   }
   return path.resolve(pluginInput.worktree || pluginInput.project?.worktree || pluginInput.directory || process.cwd())
 }
-
-const sharedConfigPath = (configPathOverride?: string) =>
-  configPathOverride ? path.resolve(configPathOverride) : sharedGlobalSettingsPath()
 
 const readJsonFile = async (configPath: string) => {
   try {

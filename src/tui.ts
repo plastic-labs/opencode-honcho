@@ -14,7 +14,7 @@ import {
   needsObservationUpgradePrompt,
   observationUpgradeNotice,
   resolveSessionPeerIds,
-  sharedGlobalSettingsPath,
+  sharedConfigPath,
   unifiedImportFollowUp,
   type ObservationMode,
   type RecallMode,
@@ -22,6 +22,8 @@ import {
 } from "./core.js"
 
 const PACKAGE_ID = "@honcho-ai/opencode-honcho"
+
+const resolveConfigPath = () => sharedConfigPath(process.env.OPENCODE_HONCHO_CONFIG_PATH)
 
 const SHARED_CONFIG_PRESETS: Record<string, readonly string[]> = Object.fromEntries(
   Object.entries(SETTING_ENUMS).map(([key, values]) => [key.toLowerCase(), values]),
@@ -57,7 +59,7 @@ type GlobalSettings = {
 }
 
 const readGlobalSettings = async (): Promise<GlobalSettings> => {
-  const configPath = sharedGlobalSettingsPath()
+  const configPath = resolveConfigPath()
   try {
     const raw = await readFile(configPath, "utf-8")
     const parsed = JSON.parse(raw)
@@ -71,7 +73,7 @@ const readGlobalSettings = async (): Promise<GlobalSettings> => {
 }
 
 const readSharedConfig = async (): Promise<Record<string, unknown> | null> => {
-  const configPath = sharedGlobalSettingsPath()
+  const configPath = resolveConfigPath()
   try {
     const raw = await readFile(configPath, "utf-8")
     const parsed = JSON.parse(raw)
@@ -88,7 +90,7 @@ const readSharedConfig = async (): Promise<Record<string, unknown> | null> => {
 }
 
 const writeSharedConfig = async (settings: Record<string, unknown>) => {
-  const configPath = sharedGlobalSettingsPath()
+  const configPath = resolveConfigPath()
   await mkdir(path.dirname(configPath), { recursive: true })
   await writeFile(configPath, `${JSON.stringify(settings, null, 2)}\n`, "utf-8")
   return configPath
@@ -121,7 +123,7 @@ const resolveSharedConfigField = (config: Record<string, unknown>, field: string
     (candidate) => candidate.toLowerCase() === field.trim().toLowerCase(),
   )
   if (!canonical) {
-    throw new Error(`Field '${field}' does not exist in ${sharedGlobalSettingsPath()}.`)
+    throw new Error(`Field '${field}' does not exist in ${resolveConfigPath()}.`)
   }
   return canonical
 }
@@ -155,7 +157,7 @@ const parseSharedConfigValue = (currentValue: unknown, rawValue: string) => {
 }
 
 const writeGlobalSettings = async (settings: GlobalSettings) => {
-  const configPath = sharedGlobalSettingsPath()
+  const configPath = resolveConfigPath()
   await mkdir(path.dirname(configPath), { recursive: true })
   await writeFile(configPath, `${JSON.stringify(settings, null, 2)}\n`, "utf-8")
   return configPath
@@ -209,7 +211,7 @@ const statusMessage = (
     `Peer name: ${normalized.peerName || "user"}`,
     ...(liveStatus?.workspaceName ? [`Workspace: ${liveStatus.workspaceName}`] : []),
     ...(liveStatus?.openCodeSessionId ? [`OpenCode session: ${liveStatus.openCodeSessionId}`] : []),
-    `Config path: ${sharedGlobalSettingsPath()}`,
+    `Config path: ${resolveConfigPath()}`,
     "",
     configured ? "Honcho is ready for OpenCode." : "Run /honcho:setup to finish configuration.",
     ...(configured && needsObservationUpgradePrompt(settings as Record<string, unknown>)
@@ -221,7 +223,7 @@ const statusMessage = (
 const settingsMessage = (settings: GlobalSettings) => {
   const host = settings.hosts?.opencode || {}
   return [
-    `Config path: ${sharedGlobalSettingsPath()}`,
+    `Config path: ${resolveConfigPath()}`,
     `API key: ${settings.apiKey?.trim() ? "set" : "not set"}`,
     `Peer name: ${settings.peerName?.trim() || "user"}`,
     `Base URL: ${settings.baseUrl?.trim() || DEFAULT_SETTINGS.baseUrl}`,
@@ -699,7 +701,7 @@ const openModeDialog = async (api: Parameters<TuiPlugin>[0]) => {
     api.ui.dialog.replace(() =>
       api.ui.DialogAlert({
         title: "Honcho config missing",
-        message: `The config does not exist at ${sharedGlobalSettingsPath()}.`,
+        message: `The config does not exist at ${resolveConfigPath()}.`,
       }),
     )
     return
@@ -710,7 +712,7 @@ const openModeDialog = async (api: Parameters<TuiPlugin>[0]) => {
     api.ui.dialog.replace(() =>
       api.ui.DialogAlert({
         title: "Honcho config empty",
-        message: `No editable fields were found in ${sharedGlobalSettingsPath()}.`,
+        message: `No editable fields were found in ${resolveConfigPath()}.`,
       }),
     )
     return
@@ -796,7 +798,7 @@ const buildCommands = (api: Parameters<TuiPlugin>[0]) => [
   {
     title: "Honcho Config",
     value: "honcho.config",
-    description: "Edit shared Honcho config fields from ~/.honcho/config.json",
+    description: "Edit shared Honcho config fields from the resolved Honcho config",
     category: "Honcho",
     slash: {
       name: "honcho:config",
@@ -838,7 +840,7 @@ export const __testing = {
   resolveSharedConfigField,
   saveSettings,
   settingsMessage,
-  sharedConfigPath: sharedGlobalSettingsPath,
+  sharedConfigPath: resolveConfigPath,
   sharedConfigPresetOptions,
   statusMessage,
   validateCloudApiKey,

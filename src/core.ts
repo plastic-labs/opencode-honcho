@@ -126,6 +126,9 @@ export const userHomeDir = () => process.env.HOME || process.env.USERPROFILE || 
 export const sharedGlobalSettingsPath = () =>
   path.join(userHomeDir(), SHARED_SETTINGS_DIR_NAME, SHARED_SETTINGS_FILE_NAME)
 
+export const sharedConfigPath = (configPathOverride?: string) =>
+  configPathOverride ? path.resolve(configPathOverride) : sharedGlobalSettingsPath()
+
 export const normalizeId = (value: string) =>
   value.toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "") || "default"
 
