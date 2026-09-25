@@ -14,17 +14,23 @@ Give OpenCode long-term memory that survives context wipes, session restarts, an
 
 ### Step 2: Install the Plugin
 
-OpenCode installs the Honcho plugin and adds it to your global OpenCode config.
+The plugin supports OpenCode 2.x and 1.x from one package. OpenCode installs it and adds it to your global OpenCode config.
+
+OpenCode 2.x (`@opencode/cli`):
+
+```bash
+opencode plugin add "@honcho-ai/opencode-honcho"
+```
+
+OpenCode 1.x:
 
 ```bash
 opencode plugin "@honcho-ai/opencode-honcho" --global
 ```
 
-To update an existing plugin install:
+To update an existing install, run `opencode plugin update` (2.x) or `opencode plugin "@honcho-ai/opencode-honcho" --force` (1.x).
 
-```bash
-opencode plugin "@honcho-ai/opencode-honcho" --force
-```
+If you edit the config by hand instead, the key is `plugins` on 2.x and `plugin` on 1.x, both taking `"@honcho-ai/opencode-honcho"` as an entry.
 
 Existing installs keep **directional** observation until you choose. After updating, OpenCode prompts you to keep directional or switch to unified (also via `/honcho:setup` or `/honcho:config`). If you switch to unified, you can optionally run `/honcho:import` to reingest local OpenCode transcripts into the new collection.
 
@@ -184,16 +190,19 @@ The plugin exposes these tools inside OpenCode:
 
 ## Plugin Surfaces
 
-The plugin uses these OpenCode plugin capabilities:
+One `./server` entry serves both OpenCode generations: 1.x calls its `server()` hook map, 2.x reads its `id` and `setup()`.
 
-- `event`
-- `chat.message`
-- `tool.execute.after`
-- `command.execute.before`
-- `experimental.chat.system.transform`
-- `experimental.session.compacting`
-- `shell.env`
-- `tool`
+| Purpose | OpenCode 1.x | OpenCode 2.x |
+|---|---|---|
+| Capture the user turn, fetch prompt-specific recall | `chat.message` | `session.hook("prompt")` |
+| Memory instruction + stable snapshot (+ recall on 2.x) | `experimental.chat.system.transform` | `session.hook("context")` |
+| Continuity block during compaction | `experimental.session.compacting` | `session.hook("compaction")` |
+| Record significant tool activity | `tool.execute.after` | `tool.hook("execute.after")` |
+| `HONCHO_*` variables for shell tools | `shell.env` | `shell.hook("create.before")` |
+| `honcho_*` tools | `tool` | `tool.transform` |
+| Session start, assistant capture, cleanup | `event` | `event.subscribe()` (`session.created`, `session.text.ended`, `session.step.ended`, `session.execution.*`, `session.deleted`) |
+
+On 2.x, prompt-specific recall rides in the request context instead of a synthetic message part, because 2.x persists prompt-hook edits as the user's message.
 
 ### How hooks drive memory
 
@@ -209,7 +218,20 @@ For macOS/Linux local branch testing:
 ```bash
 bun install
 bun run build
+```
+
+On OpenCode 1.x, register the checkout with the CLI:
+
+```bash
 opencode plugin "$PWD" --global --force
 ```
 
-That command wires the current checkout into OpenCode with `--force`, which is the intended local branch-testing flow.
+On OpenCode 2.x, `opencode plugin add` only accepts npm or Git package specifiers, so point the `plugins` key in `~/.config/opencode/opencode.json` at the checkout instead:
+
+```jsonc
+{
+  "plugins": ["/absolute/path/to/opencode-honcho"]
+}
+```
+
+OpenCode 2.x resolves a local plugin directory by its root `server` and `tui` modules rather than the `exports` map, so the checkout ships `server.js` and `tui.js` shims that re-export `dist/`. Run `bun run build` before starting OpenCode. To test the packed tarball on 2.x, unpack it and point `plugins` at the unpacked directory; `plugin add` does not take tarballs. Plugin logs go to stderr on 2.x (`opencode run --standalone --print-logs`) and to OpenCode's log under `service=opencode-honcho` on 1.x.
