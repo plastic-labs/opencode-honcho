@@ -80,7 +80,7 @@ export const setup = async (ctx: PluginContext) => {
     if (blocks.length === 0) return
     for (const text of blocks) event.system.push({ type: "text", text })
     const recall = pendingRecall.get(event.sessionID)
-    if (recall) event.system.push({ type: "text", text: recall })
+    if (recall) event.messages.push({ role: "user", content: [{ type: "text", text: recall }] })
   })
 
   await ctx.session.hook("compaction", async (event) => {
