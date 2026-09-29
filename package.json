@@ -4,6 +4,22 @@
   "type": "module",
   "description": "Honcho memory integration for OpenCode (1.x and 2.x)",
   "license": "MIT",
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "plugin",
+    "memory",
+    "honcho",
+    "coding-agent"
+  ],
+  "homepage": "https://honcho.dev/docs/v3/guides/integrations/opencode",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/plastic-labs/opencode-honcho.git"
+  },
+  "bugs": {
+    "url": "https://github.com/plastic-labs/opencode-honcho/issues"
+  },
   "packageManager": "bun@1.3.9",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
