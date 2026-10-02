@@ -180,7 +180,7 @@ describe("OpenCode 2 event scoping", () => {
     a.ctx.options = { configPath }
     b.ctx.options = { configPath }
     const mod = await import("../dist/server.js")
-    const cleanups = [await mod.default.setup(a.ctx), await mod.default.setup(b.ctx)]
+    const cleanups = []
     const emit = async (type, sessionID, location) => {
       while (waiting.length < 2) await new Promise((resolve) => setTimeout(resolve, 5))
       const event = { id: type, created: Date.now(), type, ...(location ? { location: { directory: location } } : {}), data: { sessionID } }
@@ -195,6 +195,8 @@ describe("OpenCode 2 event scoping", () => {
         .filter((e) => e.owned)
         .map((e) => `${e.directory}:${e.type}:${e.sessionId}`)
     try {
+      cleanups.push(await mod.default.setup(a.ctx))
+      cleanups.push(await mod.default.setup(b.ctx))
       await emit("session.created", "ses_a", "/work/a")
       await emit("session.execution.succeeded", "ses_a") // carries no location: follows the session
       await emit("session.created", "ses_b", "/work/b")
