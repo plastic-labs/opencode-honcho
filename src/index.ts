@@ -1327,7 +1327,8 @@ export const createHonchoCore = (host: HostAdapter, configPath?: string) => {
           runtime.agentPeer,
           update.text,
           {
-            source,
+            source: "opencode",
+            event: source,
             sessionId: runtime.sessionId,
             messageId: update.messageId,
           },
@@ -1496,7 +1497,8 @@ export const createHonchoCore = (host: HostAdapter, configPath?: string) => {
         const state = getState(deriveSessionStateKey(runtime))
         state.promptCount += 1
         await captureMessage(runtime, runtime.userPeer, message, {
-          source,
+          source: "opencode",
+          event: source,
           sessionId: runtime.sessionId,
         }, createdAt)
         const candidate = durableConclusionCandidate(message, runtime.config)
@@ -1589,7 +1591,8 @@ export const createHonchoCore = (host: HostAdapter, configPath?: string) => {
           runtime.agentPeer,
           `[Tool] ${summary}`,
           {
-            source,
+            source: "opencode",
+            event: source,
             tool: toolName,
             callID,
             sessionId: runtime.sessionId,
@@ -1658,7 +1661,7 @@ export const createHonchoCore = (host: HostAdapter, configPath?: string) => {
             runtime,
             runtime.agentPeer,
             text,
-            { source, sessionId: runtime.sessionId, messageId },
+            { source: "opencode", event: source, sessionId: runtime.sessionId, messageId },
             createdAt ?? timestampToIso(Date.now()),
           )
         })
