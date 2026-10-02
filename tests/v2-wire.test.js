@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { mkdtemp, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 
@@ -7,7 +7,8 @@ import path from "node:path"
 // v2 `setup()` against a recording context. No Honcho traffic: config has no API key, so the
 // core skips network work but still registers every hook and tool.
 
-const fakeContext = () => {
+// A shared `subscribe` models one server-wide stream feeding several instances.
+const fakeContext = ({ directory = process.cwd(), subscribe } = {}) => {
   const hooks = { session: [], tool: [], shell: [] }
   const tools = []
   const subscribers = []
@@ -17,22 +18,26 @@ const fakeContext = () => {
   }
   const ctx = {
     app: { name: "opencode", version: "2.0.16", channel: "latest" },
-    location: { directory: process.cwd(), project: { id: "prj", directory: process.cwd(), canonical: process.cwd() } },
+    location: { directory, project: { id: "prj", directory, canonical: directory } },
     options: {},
     event: {
-      subscribe: ({ signal } = {}) => ({
-        [Symbol.asyncIterator]() {
-          return {
-            next: () =>
-              new Promise((resolve) => {
-                subscribers.push(resolve)
-                signal?.addEventListener("abort", () => resolve({ done: true }), { once: true })
-              }),
-          }
-        },
-      }),
+      subscribe:
+        subscribe ??
+        (({ signal } = {}) => ({
+          [Symbol.asyncIterator]() {
+            return {
+              next: () =>
+                new Promise((resolve) => {
+                  subscribers.push(resolve)
+                  signal?.addEventListener("abort", () => resolve({ done: true }), { once: true })
+                }),
+            }
+          },
+        })),
     },
-    session: { hook: hook(hooks.session) },
+    session: {
+      hook: hook(hooks.session),
+    },
     shell: { hook: hook(hooks.shell) },
     tool: {
       hook: hook(hooks.tool),
@@ -43,9 +48,10 @@ const fakeContext = () => {
     },
   }
   const find = (bucket, name) => bucket.find((entry) => entry.name === name)?.callback
-  const emit = async (type, data) => {
+  const emit = async (type, data, location) => {
     while (subscribers.length === 0) await new Promise((resolve) => setTimeout(resolve, 5))
-    subscribers.shift()({ value: { type, data, created: Date.now() }, done: false })
+    const event = { type, data, created: Date.now(), ...(location ? { location: { directory: location } } : {}) }
+    subscribers.shift()({ value: event, done: false })
   }
   return { ctx, hooks, tools, find, emit }
 }
@@ -138,7 +144,7 @@ describe("OpenCode 2 cleanup", () => {
       const { ctx, emit } = fakeContext()
       ctx.options = { configPath }
       const cleanup = await (await import("../dist/server.js")).default.setup(ctx)
-      await emit("session.step.ended", { sessionID: "ses_a", assistantMessageID: "msg_a" })
+      await emit("session.step.ended", { sessionID: "ses_a", assistantMessageID: "msg_a" }, ctx.location.directory)
       while (requests === 0) await new Promise((resolve) => setTimeout(resolve, 5))
 
       let settled = false
@@ -151,6 +157,63 @@ describe("OpenCode 2 cleanup", () => {
       release()
       globalThis.fetch = realFetch
       console.error = realError
+    }
+  })
+})
+
+describe("OpenCode 2 event scoping", () => {
+  test("an instance only acts on events from its own location", async () => {
+    const keys = ["HONCHO_API_KEY", "HONCHO_URL", "HONCHO_BASE_URL", "OPENCODE_CONFIG_DIR", "OPENCODE_HONCHO_TRACE_EVENTS"]
+    const saved = Object.fromEntries(keys.map((key) => [key, process.env[key]]))
+    const root = await mkdtemp(path.join(os.tmpdir(), "honcho-v2-scope-"))
+    const configPath = path.join(root, "config.json")
+    await writeFile(configPath, JSON.stringify({ peerName: "wire" }))
+    for (const key of keys) delete process.env[key]
+    process.env.OPENCODE_CONFIG_DIR = path.join(root, "opencode")
+    process.env.OPENCODE_HONCHO_TRACE_EVENTS = "1"
+    const savedError = console.error
+    const lines = []
+    console.error = (...args) => lines.push(args.map(String).join(" "))
+    const waiting = []
+    const stream = { [Symbol.asyncIterator]: () => ({ next: () => new Promise((resolve) => waiting.push(resolve)) }) }
+    const a = fakeContext({ directory: "/work/a", subscribe: () => stream })
+    const b = fakeContext({ directory: "/work/b", subscribe: () => stream })
+    a.ctx.options = { configPath }
+    b.ctx.options = { configPath }
+    const mod = await import("../dist/server.js")
+    const cleanups = []
+    const emit = async (type, sessionID, location) => {
+      while (waiting.length < 2) await new Promise((resolve) => setTimeout(resolve, 5))
+      const event = { id: type, created: Date.now(), type, ...(location ? { location: { directory: location } } : {}), data: { sessionID } }
+      for (const resolve of waiting.splice(0)) resolve({ value: event, done: false })
+      while (waiting.length < 2) await new Promise((resolve) => setTimeout(resolve, 5))
+    }
+    const ownedBy = () =>
+      lines
+        .map((line) => /event (\{.*\})$/.exec(line))
+        .filter(Boolean)
+        .map((match) => JSON.parse(match[1]))
+        .filter((e) => e.owned)
+        .map((e) => `${e.directory}:${e.type}:${e.sessionId}`)
+    try {
+      cleanups.push(await mod.default.setup(a.ctx))
+      cleanups.push(await mod.default.setup(b.ctx))
+      await emit("session.created", "ses_a", "/work/a")
+      await emit("session.execution.succeeded", "ses_a") // carries no location: follows the session
+      await emit("session.created", "ses_b", "/work/b")
+      await emit("session.execution.succeeded", "ses_unknown")
+      expect(ownedBy()).toEqual([
+        "/work/a:session.created:ses_a",
+        "/work/a:session.execution.succeeded:ses_a",
+        "/work/b:session.created:ses_b",
+      ])
+    } finally {
+      for (const cleanup of cleanups) cleanup()
+      console.error = savedError
+      for (const key of keys) {
+        if (saved[key] === undefined) delete process.env[key]
+        else process.env[key] = saved[key]
+      }
     }
   })
 })

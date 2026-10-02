@@ -25,6 +25,11 @@ const eventData = (event: V2Event): Record<string, unknown> => {
 }
 const str = (value: unknown) => (typeof value === "string" && value ? value : null)
 
+const eventLocationDirectory = (event: V2Event) => {
+  const location: unknown = isRecord(event) ? event.location : undefined
+  return isRecord(location) ? str(location.directory) : null
+}
+
 /**
  * Logger for the v2 path. Always stderr: the OpenCode 2 server can run with stdout as its RPC
  * transport (`serve --stdio`), so a plugin must never write to stdout.
@@ -64,7 +69,16 @@ export const setup = async (ctx: PluginContext) => {
   // prompt hook's edits become the persisted user text, so it rides in the request context instead.
   const pendingRecall = new Map<string, string>()
 
+  const here = ctx.location.directory
+  const sessionDirectories = new Map<string, string>()
+  const ownsSession = (event: V2Event, sessionID: string) => {
+    const published = eventLocationDirectory(event)
+    if (published) sessionDirectories.set(sessionID, published)
+    return (published ?? sessionDirectories.get(sessionID)) === here
+  }
+
   await ctx.session.hook("prompt", async (event) => {
+    sessionDirectories.set(event.sessionID, here)
     const text = typeof event.prompt.text === "string" ? event.prompt.text.trim() : ""
     if (!text) return
     const block = await core.captureUserPrompt(
@@ -116,7 +130,18 @@ export const setup = async (ctx: PluginContext) => {
     const data = eventData(event)
     const sessionID = str(data.sessionID)
     if (!sessionID) return
-    if (process.env.OPENCODE_HONCHO_TRACE_EVENTS) await core.log("debug", "event", { type: event.type, sessionId: sessionID })
+    const owned = ownsSession(event, sessionID)
+    if (event.type === "session.deleted") sessionDirectories.delete(sessionID)
+    if (process.env.OPENCODE_HONCHO_TRACE_EVENTS) {
+      await core.log("debug", "event", {
+        type: event.type,
+        sessionId: sessionID,
+        location: eventLocationDirectory(event),
+        directory: ctx.location.directory,
+        owned,
+      })
+    }
+    if (!owned) return
     switch (event.type) {
       case "session.created": {
         // Best effort, never blocks startup, attempted even when Honcho is not configured.
