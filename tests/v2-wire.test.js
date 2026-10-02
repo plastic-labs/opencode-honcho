@@ -48,9 +48,10 @@ const fakeContext = ({ directory = process.cwd(), subscribe } = {}) => {
     },
   }
   const find = (bucket, name) => bucket.find((entry) => entry.name === name)?.callback
-  const emit = async (type, data) => {
+  const emit = async (type, data, location) => {
     while (subscribers.length === 0) await new Promise((resolve) => setTimeout(resolve, 5))
-    subscribers.shift()({ value: { type, data, created: Date.now() }, done: false })
+    const event = { type, data, created: Date.now(), ...(location ? { location: { directory: location } } : {}) }
+    subscribers.shift()({ value: event, done: false })
   }
   return { ctx, hooks, tools, find, emit }
 }
@@ -143,7 +144,7 @@ describe("OpenCode 2 cleanup", () => {
       const { ctx, emit } = fakeContext()
       ctx.options = { configPath }
       const cleanup = await (await import("../dist/server.js")).default.setup(ctx)
-      await emit("session.step.ended", { sessionID: "ses_a", assistantMessageID: "msg_a" })
+      await emit("session.step.ended", { sessionID: "ses_a", assistantMessageID: "msg_a" }, ctx.location.directory)
       while (requests === 0) await new Promise((resolve) => setTimeout(resolve, 5))
 
       let settled = false
