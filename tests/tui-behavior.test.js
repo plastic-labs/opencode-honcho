@@ -106,3 +106,12 @@ test("tui honors OPENCODE_HONCHO_CONFIG_PATH override for reads, writes, and dis
     else process.env.OPENCODE_HONCHO_CONFIG_PATH = previousOverride
   }
 })
+
+test("tui shows endpoint.baseUrl when there is no top-level baseUrl", () => {
+  const url = (settings) => __testing.settingsMessage(settings).match(/Base URL: (.*)/)[1]
+  const endpoint = { baseUrl: "http://selfhosted:8000" }
+  assert.equal(url({ endpoint }), "http://selfhosted:8000")
+  assert.equal(url({ endpoint: { baseUrl: "http://top:1" }, hosts: { opencode: { endpoint } } }), "http://selfhosted:8000")
+  assert.equal(url({ baseUrl: "http://explicit:9", endpoint }), "http://explicit:9")
+  assert.equal(url({}), "https://api.honcho.dev")
+})

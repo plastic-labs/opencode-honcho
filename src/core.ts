@@ -129,6 +129,18 @@ export const sharedGlobalSettingsPath = () =>
 export const sharedConfigPath = (configPathOverride?: string) =>
   configPathOverride ? path.resolve(configPathOverride) : sharedGlobalSettingsPath()
 
+const endpointBaseUrl = (scope: unknown) => {
+  const endpoint = isRecord(scope) ? scope.endpoint : undefined
+  return isRecord(endpoint) && typeof endpoint.baseUrl === "string" ? endpoint.baseUrl.trim() : ""
+}
+
+/** `baseUrl`, else the `endpoint.baseUrl` other Honcho integrations write (host block, then top level). */
+export const resolveBaseUrl = (raw: Record<string, unknown>, hostId = "opencode") => {
+  const baseUrl = typeof raw.baseUrl === "string" ? raw.baseUrl.trim() : ""
+  if (baseUrl) return baseUrl
+  return endpointBaseUrl(isRecord(raw.hosts) ? raw.hosts[hostId] : undefined) || endpointBaseUrl(raw)
+}
+
 export const normalizeId = (value: string) =>
   value.toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "") || "default"
 

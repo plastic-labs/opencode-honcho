@@ -19,6 +19,7 @@ import {
   normalizeId,
   observationUpgradeNextSteps,
   observationUpgradeNotice,
+  resolveBaseUrl,
   resolveSessionPeerIds,
   SETTING_ENUMS,
   sharedConfigPath,
@@ -623,6 +624,8 @@ const normalizeScopedSettings = (raw: Record<string, unknown>, hostId = "opencod
     if (typeof value === "string" && !value.trim() && INHERITABLE_STRING_KEYS.has(field)) continue
     normalized[field] = value
   }
+  const baseUrl = resolveBaseUrl(raw, hostId)
+  if (baseUrl) normalized.baseUrl = baseUrl
   const hostBlock = isRecord(raw.hosts) ? hostScopedSettings(raw.hosts[hostId]) : null
 
   if (hostBlock) {
