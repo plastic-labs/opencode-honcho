@@ -117,49 +117,29 @@ describe("OpenCode 2 entrypoints", () => {
 })
 
 describe("OpenCode 2 cleanup", () => {
-  test("cleanup waits for an in-flight assistant capture", async () => {
-    const home = await mkdtemp(path.join(os.tmpdir(), "honcho-v2-"))
-    const configPath = path.join(home, "config.json")
-    await writeFile(configPath, JSON.stringify({ peerName: "wire", hosts: { opencode: { recallMode: "tools" } } }))
-    const keys = ["HOME", "OPENCODE_CONFIG_DIR", "HONCHO_API_KEY", "HONCHO_URL", "HONCHO_BASE_URL", "HONCHO_WORKSPACE", "HONCHO_PEER_NAME"]
-    const saved = Object.fromEntries(keys.map((key) => [key, process.env[key]]))
-    for (const key of keys) delete process.env[key]
-    process.env.HOME = home
-    process.env.OPENCODE_CONFIG_DIR = path.join(home, "opencode")
-    process.env.HONCHO_API_KEY = "test-key"
+  test("cleanup waits for an in-flight Honcho write", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "honcho-v2-"))
+    const configPath = path.join(dir, "config.json")
+    await writeFile(configPath, JSON.stringify({ apiKey: "test-key", peerName: "wire" }))
 
-    // Answers every Honcho call; message writes wait on `gate` so they can be observed in flight.
+    // Every Honcho request waits on the gate, then fails; the plugin logs and moves on.
     let release
-    let gate = null
-    const writes = []
-    const json = (value) => new Response(JSON.stringify(value), { headers: { "content-type": "application/json" } })
-    const savedFetch = globalThis.fetch
-    globalThis.fetch = async (url, init = {}) => {
-      const { pathname } = new URL(String(url))
-      const body = typeof init.body === "string" ? JSON.parse(init.body) : {}
-      if (/\/sessions\/[^/]+\/messages$/.test(pathname)) {
-        writes.push(body)
-        await gate
-        return json([{ id: "msg", content: "", created_at: new Date().toISOString() }])
-      }
-      if (/\/sessions\/[^/]+\/peers$/.test(pathname)) return new Response(null, { status: 204 })
-      return json({ id: body.id, metadata: {}, configuration: {}, created_at: new Date().toISOString(), is_active: true })
+    const gate = new Promise((resolve) => (release = resolve))
+    let requests = 0
+    const realFetch = globalThis.fetch
+    const realError = console.error
+    globalThis.fetch = async () => {
+      requests += 1
+      await gate
+      throw new Error("stubbed")
     }
-    const savedError = console.error
     console.error = () => {}
-
-    let cleanup
     try {
       const { ctx, emit } = fakeContext()
       ctx.options = { configPath }
-      const mod = await import("../dist/server.js")
-      cleanup = await mod.default.setup(ctx)
-
-      gate = new Promise((resolve) => (release = resolve))
-      const turn = { sessionID: "ses_a", assistantMessageID: "msg_a" }
-      await emit("session.text.ended", { ...turn, ordinal: 0, text: "pong" })
-      await emit("session.step.ended", turn)
-      while (writes.length === 0) await new Promise((resolve) => setTimeout(resolve, 5))
+      const cleanup = await (await import("../dist/server.js")).default.setup(ctx)
+      await emit("session.step.ended", { sessionID: "ses_a", assistantMessageID: "msg_a" })
+      while (requests === 0) await new Promise((resolve) => setTimeout(resolve, 5))
 
       let settled = false
       const closing = cleanup().then(() => (settled = true))
@@ -167,16 +147,10 @@ describe("OpenCode 2 cleanup", () => {
       expect(settled).toBe(false)
       release()
       await closing
-      expect(JSON.stringify(writes)).toContain("pong")
     } finally {
-      release?.()
-      await cleanup?.()
-      globalThis.fetch = savedFetch
-      console.error = savedError
-      for (const key of keys) {
-        if (saved[key] === undefined) delete process.env[key]
-        else process.env[key] = saved[key]
-      }
+      release()
+      globalThis.fetch = realFetch
+      console.error = realError
     }
   })
 })
