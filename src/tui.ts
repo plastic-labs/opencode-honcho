@@ -1,9 +1,9 @@
 import type { TuiPluginModule } from "@opencode-ai/plugin/tui"
-import { sharedGlobalSettingsPath } from "./core.js"
 import {
   modeEditableFieldPaths,
   normalizeSettings,
   readSharedConfig,
+  resolveConfigPath,
   resolveSharedConfigField,
   saveSettings,
   settingsMessage,
@@ -33,7 +33,7 @@ export const __testing = {
   resolveSharedConfigField,
   saveSettings,
   settingsMessage,
-  sharedConfigPath: sharedGlobalSettingsPath,
+  sharedConfigPath: resolveConfigPath,
   sharedConfigPresetOptions,
   statusMessage,
   validateCloudApiKey,

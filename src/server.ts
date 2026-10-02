@@ -2,7 +2,9 @@ import { createHonchoRuntimePlugin } from "./index.js"
 import { definition } from "./v2/runtime.js"
 
 /** OpenCode 1.x server plugin (hook map). */
-export const server = createHonchoRuntimePlugin()
+export const server = createHonchoRuntimePlugin({
+  configPath: process.env.OPENCODE_HONCHO_CONFIG_PATH,
+})
 
 /**
  * One default export for both OpenCode generations. Both resolve this package's `./server`
