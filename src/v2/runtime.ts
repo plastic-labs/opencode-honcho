@@ -55,7 +55,8 @@ const isCurrentGeneration = (location: string, generation: number) => generation
 export const setup = async (ctx: PluginContext) => {
   const location = ctx.location.directory
   const generation = nextGeneration(location)
-  const configPath = typeof ctx.options?.configPath === "string" ? ctx.options.configPath : undefined
+  const configPath =
+    typeof ctx.options?.configPath === "string" ? ctx.options.configPath : process.env.OPENCODE_HONCHO_CONFIG_PATH || undefined
   const core = createHonchoCore(consoleHost(ctx.location.directory, ctx.location.project?.directory), configPath)
   core.setHostVersion(ctx.app.version)
 
