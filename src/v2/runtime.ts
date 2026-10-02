@@ -11,7 +11,6 @@ type V2Event = ReturnType<PluginContext["event"]["subscribe"]> extends AsyncIter
 
 export const PLUGIN_ID = "@honcho-ai/opencode-honcho"
 
-// Upper bound on how long the cleanup waits for in-flight Honcho writes before letting go.
 const SETTLE_TIMEOUT_MS = 15_000
 
 const modelId = (model: ModelRef | undefined) => {
@@ -64,49 +63,9 @@ export const setup = async (ctx: PluginContext) => {
   // prompt hook's edits become the persisted user text, so it rides in the request context instead.
   const pendingRecall = new Map<string, string>()
 
-  // Work that has to land before this instance goes away. `opencode run --standalone` tears the
-  // process down as soon as the reply is complete, so a Honcho write still in flight when the
-  // cleanup below resolves is lost. The cleanup awaits this set, never the event stream.
-  const inflight = new Set<Promise<unknown>>()
-  const track = <T>(work: Promise<T>) => {
-    inflight.add(work)
-    work.then(() => inflight.delete(work), () => inflight.delete(work))
-    return work
-  }
-  const settle = async () => {
-    const deadline = Date.now() + SETTLE_TIMEOUT_MS
-    while (inflight.size > 0) {
-      const remaining = deadline - Date.now()
-      if (remaining <= 0) break
-      let timer: ReturnType<typeof setTimeout> | undefined
-      const timeout = new Promise<void>((resolve) => {
-        timer = setTimeout(resolve, remaining)
-        timer.unref?.()
-      })
-      await Promise.race([Promise.allSettled(Array.from(inflight)), timeout])
-      clearTimeout(timer)
-      // Let the event loop pull an event that was already queued behind the one that just settled.
-      await new Promise<void>((resolve) => setImmediate(resolve))
-    }
-  }
-
-  // Sessions this instance has hydrated. Under `opencode run --standalone` the plugin is loaded
-  // inside the request that creates the session, after `session.created` has been published, so
-  // that event never reaches this subscriber. The first hook for a session hydrates it instead;
-  // whichever of the hook or the event arrives first wins, the other is a no-op.
-  const hydrated = new Set<string>()
-  const ensureSessionReady = async (sessionID: string) => {
-    if (hydrated.has(sessionID)) return
-    hydrated.add(sessionID)
-    // Best effort, attempted even when Honcho is not configured.
-    await ensureHonchoSkillInstalled()
-    await core.hydrateSession({ sessionID })
-  }
-
   await ctx.session.hook("prompt", async (event) => {
     const text = typeof event.prompt.text === "string" ? event.prompt.text.trim() : ""
     if (!text) return
-    await ensureSessionReady(event.sessionID)
     const block = await core.captureUserPrompt(
       { sessionID: event.sessionID },
       text,
@@ -159,7 +118,9 @@ export const setup = async (ctx: PluginContext) => {
     if (process.env.OPENCODE_HONCHO_TRACE_EVENTS) await core.log("debug", "event", { type: event.type, sessionId: sessionID })
     switch (event.type) {
       case "session.created": {
-        await ensureSessionReady(sessionID)
+        // Best effort, never blocks startup, attempted even when Honcho is not configured.
+        void ensureHonchoSkillInstalled()
+        await core.hydrateSession({ sessionID })
         return
       }
       case "session.step.started": {
@@ -212,17 +173,22 @@ export const setup = async (ctx: PluginContext) => {
   }
 
   const controller = new AbortController()
+  const inflight = new Set<Promise<void>>()
   void (async () => {
     try {
       for await (const event of ctx.event.subscribe({ signal: controller.signal })) {
         if (!isCurrentGeneration(location, generation)) break
+        const work = handleEvent(event)
+        inflight.add(work)
         try {
-          await track(handleEvent(event))
+          await work
         } catch (error) {
           await core.log("error", "Honcho event handling failed.", {
             event: event.type,
             message: error instanceof Error ? error.message : String(error),
           })
+        } finally {
+          inflight.delete(work)
         }
       }
     } catch (error) {
@@ -240,15 +206,14 @@ export const setup = async (ctx: PluginContext) => {
     directory: ctx.location.directory,
   })
 
-  // Wait for in-flight work, then abort the stream. Never await the stream itself: waiting on it
-  // here stalls plugin reloads. OpenCode 2 awaits the promise this returns (`Plugin.Cleanup` is
-  // `() => Promise<void> | void`), which under `opencode run --standalone` is the only thing
-  // holding the process open while the reply is still being written to Honcho.
+  // `opencode run --standalone` exits once this resolves, so wait for writes still in flight.
+  // Never await the stream itself: that stalls plugin reloads.
   return async () => {
-    if (inflight.size > 0) {
-      await core.log("debug", "Honcho plugin unloading; waiting for in-flight work.", { pending: inflight.size })
-    }
-    await settle()
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const timeout = new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, SETTLE_TIMEOUT_MS)
+    })
+    await Promise.race([Promise.allSettled([...inflight]), timeout]).finally(() => clearTimeout(timer))
     controller.abort()
   }
 }
