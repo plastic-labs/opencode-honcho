@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.1
+
+- OpenCode 2.x: act only on sessions that belong to the plugin instance's location. OpenCode 2 runs one plugin instance per location but its event stream is server-wide, so with several directories open each assistant reply was hydrated and captured once per directory and landed in every per-directory Honcho session. Events without a location (`session.execution.*`) follow the directory recorded for their session (#55).
+- OpenCode 2.x: flush the assistant reply before `opencode run --standalone` exits, so one-shot runs capture the assistant message (#54, fixes #49).
+- Honor `endpoint.baseUrl` from shared configs written by other Honcho integrations. `baseUrl` now resolves as top-level `baseUrl`, else `hosts.opencode.endpoint.baseUrl`, else `endpoint.baseUrl`, in the runtime and in the TUI status, settings, import and configured checks. Self-hosted setups no longer fall back to `https://api.honcho.dev`. `HONCHO_URL` still overrides everything (#56, fixes #48).
+- Add `OPENCODE_HONCHO_CONFIG_PATH` to point the plugin at a Honcho config file outside the default location (#51).
+- Stamp `source=opencode` on recorded messages (#47).
+- Add npm keywords, homepage and repository metadata (#53).
+
 ## 0.2.0
 
 - Support OpenCode 2.x (`@opencode/cli`, `@opencode/plugin` 2.0.x) alongside 1.x from one package. The `./server` and `./tui` entries default-export `{ id, server, setup }` / `{ id, tui, setup }`: 1.x calls `server()`/`tui()`, 2.x calls `setup()`. Fixes the `Plugin must export a default definition with an id and an effect or setup function` load failure (#46).
