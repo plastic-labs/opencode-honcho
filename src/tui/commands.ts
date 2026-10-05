@@ -12,6 +12,7 @@ import {
   isRecord,
   needsObservationUpgradePrompt,
   observationUpgradeNotice,
+  resolveBaseUrl,
   resolveSessionPeerIds,
   sharedConfigPath,
   unifiedImportFollowUp,
@@ -143,10 +144,7 @@ const writeGlobalSettings = async (settings: GlobalSettings) => {
 }
 
 export const normalizeSettings = (settings: GlobalSettings) => ({
-  baseUrl:
-    typeof settings.baseUrl === "string" && settings.baseUrl.trim()
-      ? settings.baseUrl
-      : DEFAULT_SETTINGS.baseUrl,
+  baseUrl: resolveBaseUrl(settings as Record<string, unknown>) || DEFAULT_SETTINGS.baseUrl,
   apiKey: typeof settings.apiKey === "string" && settings.apiKey.trim() ? settings.apiKey.trim() : "",
   peerName: typeof settings.peerName === "string" ? settings.peerName.trim() : "",
 })
@@ -188,7 +186,7 @@ export const settingsMessage = (settings: GlobalSettings) => {
     `Config path: ${resolveConfigPath()}`,
     `API key: ${settings.apiKey?.trim() ? "set" : "not set"}`,
     `Peer name: ${settings.peerName?.trim() || "user"}`,
-    `Base URL: ${settings.baseUrl?.trim() || DEFAULT_SETTINGS.baseUrl}`,
+    `Base URL: ${resolveBaseUrl(settings as Record<string, unknown>) || DEFAULT_SETTINGS.baseUrl}`,
     `Workspace: ${host.workspace || DEFAULT_SETTINGS.workspace}`,
     `AI peer: ${host.aiPeer || DEFAULT_SETTINGS.aiPeer}`,
     `Recall mode: ${host.recallMode || DEFAULT_SETTINGS.recallMode}`,
@@ -271,7 +269,7 @@ const importConfigFromSettings = (settings: GlobalSettings) => {
   )
   return {
     apiKey: settings.apiKey || "",
-    baseUrl: settings.baseUrl || DEFAULT_SETTINGS.baseUrl,
+    baseUrl: resolveBaseUrl(settings as Record<string, unknown>) || DEFAULT_SETTINGS.baseUrl,
     workspaceId,
     userPeerId,
     agentPeerId,
@@ -297,7 +295,7 @@ const formatImportPreview = (plan: Awaited<ReturnType<typeof planOpenCodeImport>
 }
 
 const isConfigured = (settings: GlobalSettings) =>
-  Boolean(settings.apiKey?.trim()) || isLocalBaseUrl(settings.baseUrl || "")
+  Boolean(settings.apiKey?.trim()) || isLocalBaseUrl(resolveBaseUrl(settings as Record<string, unknown>))
 
 /** true when the user chose a mode and it was saved; false when they dismissed. */
 export const runObservationUpgrade = async (session: TuiSession, followUpLines: string[]) => {
