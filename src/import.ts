@@ -237,7 +237,7 @@ export const transcriptSourceFromV2Client = (client: OpenCodeClientV2): Transcri
           : { order: "desc", limit: V2_PAGE_SIZE, ...(includeSubagents ? {} : { parentID: null }) },
       )
       // Filter rather than stop early: the list order and `time.updated` have drifted apart in
-      // some 2.x builds, and listing is cheap next to reading transcripts.
+      // some 2.x builds.
       for (const session of page.data) {
         if (session.time.updated < start) continue
         sessions.push({

@@ -243,6 +243,126 @@ test("system transform seals the stable context on the first turn", async () => 
   }
 })
 
+test("overlapping session.created and system.transform hydrations share one dialectic fan-out", async () => {
+  const tick = () => new Promise((resolve) => setTimeout(resolve, 0))
+  const waitFor = async (predicate) => {
+    for (let i = 0; i < 50; i++) {
+      if (predicate()) return
+      await tick()
+    }
+  }
+
+  await runWithHarness(async ({ hooks, fetch }) => {
+    const chatCalls = () =>
+      fetch.calls.filter((call) => call.method === "POST" && /\/peers\/[^/]+\/chat$/.test(call.pathname))
+
+    // Defer the hydration chat responses so both triggers are guaranteed to
+    // start while the first hydration is still in flight.
+    const originalFetch = globalThis.fetch
+    const releases = []
+    globalThis.fetch = async (url, init) => {
+      const target = new URL(typeof url === "string" ? url : url.toString())
+      if (init?.method === "POST" && /\/peers\/[^/]+\/chat$/.test(target.pathname)) {
+        const started = fetch(url, init)
+        return new Promise((resolve) => releases.push(() => resolve(started)))
+      }
+      return fetch(url, init)
+    }
+    try {
+      const created = hooks.event({
+        event: { type: "session.created", properties: { sessionID: "ses-test" } },
+      })
+      await waitFor(() => chatCalls().length >= 2)
+
+      const output = { system: [] }
+      const transformed = hooks["experimental.chat.system.transform"](systemInput(), output)
+      await waitFor(() => chatCalls().length > 2 || output.system.length > 1)
+      for (let i = 0; i < 10; i++) {
+        await tick()
+      }
+
+      expect(chatCalls()).toHaveLength(2)
+      for (const release of releases.splice(0)) release()
+      await created
+      await transformed
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+})
+
+test("failed hydration is retried by the next trigger instead of cached", async () => {
+  await runWithHarness(async ({ hooks, fetch }) => {
+    const chatCalls = () =>
+      fetch.calls.filter((call) => call.method === "POST" && /\/peers\/[^/]+\/chat$/.test(call.pathname))
+
+    await hooks.event({
+      event: { type: "session.created", properties: { sessionID: "ses-test" } },
+    })
+    expect(chatCalls()).toHaveLength(2)
+
+    const output = { system: [] }
+    await hooks["experimental.chat.system.transform"](systemInput(), output)
+
+    expect(output.system).toHaveLength(1)
+    expect(chatCalls()).toHaveLength(4)
+  }, { failStableHydration: true })
+})
+
+test("failed system transform hydration stays unsealed so the next turn retries", async () => {
+  await runWithHarness(async ({ hooks, fetch }) => {
+    const chatCalls = () =>
+      fetch.calls.filter((call) => call.method === "POST" && /\/peers\/[^/]+\/chat$/.test(call.pathname))
+
+    const firstOutput = { system: [] }
+    await hooks["experimental.chat.system.transform"](systemInput(), firstOutput)
+
+    expect(firstOutput.system).toHaveLength(1)
+    expect(chatCalls()).toHaveLength(2)
+
+    const secondOutput = { system: [] }
+    await hooks["experimental.chat.system.transform"](systemInput(), secondOutput)
+
+    expect(secondOutput.system).toHaveLength(1)
+    expect(chatCalls()).toHaveLength(4)
+  }, { failStableHydration: true })
+})
+
+test("a later successful hydration seals the stable context after an earlier failure", async () => {
+  let fail = true
+  await runWithHarness(async ({ hooks }) => {
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = async (url, init) => {
+      const target = new URL(typeof url === "string" ? url : url.toString())
+      const hydrationCall =
+        (init?.method === "GET" && /\/peers\/[^/]+\/context$/.test(target.pathname)) ||
+        (init?.method === "GET" && /\/sessions\/[^/]+\/summaries$/.test(target.pathname)) ||
+        (init?.method === "POST" && /\/peers\/[^/]+\/chat$/.test(target.pathname))
+      if (hydrationCall && fail) {
+        return jsonResponse({ message: "unavailable" }, { status: 400 })
+      }
+      return originalFetch(url, init)
+    }
+    try {
+      const firstOutput = { system: [] }
+      await hooks["experimental.chat.system.transform"](systemInput(), firstOutput)
+      expect(firstOutput.system).toHaveLength(1)
+
+      fail = false
+      const secondOutput = { system: [] }
+      await hooks["experimental.chat.system.transform"](systemInput(), secondOutput)
+      expect(secondOutput.system).toHaveLength(2)
+      expect(secondOutput.system[1]).toContain("The user prefers concise engineering analysis.")
+
+      const thirdOutput = { system: [] }
+      await hooks["experimental.chat.system.transform"](systemInput(), thirdOutput)
+      expect(thirdOutput.system).toEqual(secondOutput.system)
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+})
+
 test("chat.message skips recall for trivial prompt text", async () => {
   await runWithHarness(async ({ hooks, fetch }) => {
     const chatOutput = {

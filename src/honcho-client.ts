@@ -12,7 +12,7 @@ let pluginVersion: string | undefined
 
 /**
  * Plugin version from package.json, which sits one directory above both `src/` and the bundled
- * `dist/`. Read lazily and guarded so a bad path can never stop the plugin from loading.
+ * `dist/`. Read lazily and guarded.
  */
 export const getPluginVersion = (): string => {
   if (pluginVersion) return pluginVersion

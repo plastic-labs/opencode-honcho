@@ -112,11 +112,16 @@ type ActiveRuntime = RuntimeHandle & {
 
 type SessionState = {
   stableContext: string | null
-  // Snapshot of stableContext frozen on the first system transform of the
-  // session. Frozen so provider prefix caches are never invalidated by a
-  // mid-session change to the system prompt.
+  // Snapshot of stableContext frozen on the first successful system transform
+  // of the session. Frozen so provider prefix caches are never invalidated by
+  // a mid-session change to the system prompt. A failed hydration leaves it
+  // unsealed so the next transform retries instead of pinning the failure.
   systemContext: string | null
   systemContextSealed: boolean
+  // Hydration currently running for this session. Concurrent triggers share
+  // this promise instead of each starting their own hydration. Cleared in
+  // finally so a failed hydration can be retried by the next trigger.
+  stableContextHydration: Promise<boolean> | null
   cachedPromptContext: string | null
   lastInjectedContext: string | null
   recentConclusions: string[]
@@ -572,9 +577,9 @@ const applyRawLayer = (target: HonchoSettings, raw: Record<string, unknown>) => 
       continue
     }
     if (BOOLEAN_KEYS.has(key)) {
-      // Coerce booleans at the read boundary: a config (or hand-edit, which the
-      // README invites) may carry the string "true"/"false". Only true/"true" is
-      // true, so a stray "false" can't be truthy and silently flip the prefix.
+      // Coerce booleans at the read boundary: a config may carry the string
+      // "true"/"false". Only true/"true" is true, so a stray "false" can't be
+      // truthy and silently flip the prefix.
       ;(target as Record<string, unknown>)[key] =
         value === true || (typeof value === "string" && value.trim().toLowerCase() === "true")
       continue
@@ -1091,6 +1096,7 @@ const createSessionState = (): SessionState => ({
   stableContext: null,
   systemContext: null,
   systemContextSealed: false,
+  stableContextHydration: null,
   cachedPromptContext: null,
   lastInjectedContext: null,
   recentConclusions: [],
@@ -1418,6 +1424,18 @@ export const createHonchoCore = (host: HostAdapter, configPath?: string) => {
       )
     }
 
+    const ensureStableContextHydration = async (runtime: ActiveRuntime, state: SessionState) => {
+      if (state.stableContext) {
+        return true
+      }
+      if (!state.stableContextHydration) {
+        state.stableContextHydration = hydrateSessionStartContext(runtime, state).finally(() => {
+          state.stableContextHydration = null
+        })
+      }
+      return state.stableContextHydration
+    }
+
     const refreshPromptContext = async (runtime: ActiveRuntime, state: SessionState, query: string) => {
       const topicKey = deriveTopicKey(query)
       if (!shouldRefreshPromptContext(state, topicKey, INTERNAL_CONTEXT_REFRESH)) {
@@ -1477,7 +1495,7 @@ export const createHonchoCore = (host: HostAdapter, configPath?: string) => {
     const hydrateSession = (input: Record<string, unknown>) =>
       withRuntime(input, async (runtime) => {
         const state = getState(deriveSessionStateKey(runtime))
-        await hydrateSessionStartContext(runtime, state)
+        await ensureStableContextHydration(runtime, state)
         await log("info", "Honcho session initialized for OpenCode.", await runtimeStatus(input))
       }, undefined)
 
@@ -1520,7 +1538,9 @@ export const createHonchoCore = (host: HostAdapter, configPath?: string) => {
       }, null)
 
     // System prompt additions: the Honcho instruction plus the stable memory snapshot, sealed
-    // on first use so the system prompt stays byte-identical for the rest of the session.
+    // on the first successful hydration so the system prompt stays byte-identical for the
+    // rest of the session. A failed hydration leaves the snapshot unsealed so the next
+    // transform retries instead of pinning the failed state for the whole session.
     const systemBlocks = async (input: Record<string, unknown>): Promise<string[]> => {
       const handle = await deriveRuntimeHandle(host, input, configPath)
       if (!hasConfiguredAuth(handle.config)) {
@@ -1533,9 +1553,16 @@ export const createHonchoCore = (host: HostAdapter, configPath?: string) => {
       const state = getState(deriveSessionStateKey(handle))
       if (!state.systemContextSealed) {
         if (!state.stableContext) {
-          await withRuntime(input, async (runtime) => {
-            await hydrateSessionStartContext(runtime, state)
-          }, undefined)
+          const hydrated = await withRuntime(
+            input,
+            async (runtime) => {
+              return await ensureStableContextHydration(runtime, state)
+            },
+            false,
+          )
+          if (!hydrated) {
+            return blocks
+          }
         }
         state.systemContext = state.stableContext ?? ""
         state.systemContextSealed = true
@@ -2088,9 +2115,9 @@ export const createHonchoRuntimePlugin =
           return
         }
         // Prompt-specific recall rides along with the user turn as a
-        // synthetic part (codex-honcho parity): it persists at the end of
-        // the conversation, so the system prompt - and with it the
-        // provider's prefix cache - is never invalidated mid-session.
+        // synthetic part: it persists at the end of the conversation, so
+        // the system prompt - and with it the provider's prefix cache -
+        // is never invalidated mid-session.
         const block = await core.captureUserPrompt(
           input,
           message,
