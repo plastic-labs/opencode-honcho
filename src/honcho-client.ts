@@ -1,12 +1,18 @@
 import { readFileSync } from "node:fs"
 import { Honcho } from "@honcho-ai/sdk"
-import { telemetryHeaders, type TelemetryIdentity } from "@honcho-ai/harness-plugin-core"
+import { setTelemetryHeaders, telemetryHeaders, type TelemetryIdentity } from "@honcho-ai/harness-plugin-core"
 
 /** Host name sent as `X-Honcho-Host: opencode/<version> (<platform>)`. */
 export const HOST_ID = "opencode"
 
 /** Integration name sent as `X-Honcho-Plugin: opencode-honcho/<version>`. */
 export const PLUGIN_ID = "opencode-honcho"
+
+/** OAuth client registered for this plugin in Honcho cloud. */
+export const OAUTH_CLIENT_ID = "opencode-honcho"
+
+/** The honcho CLI's client, used for sign-in until Honcho cloud knows this plugin's own. */
+export const CLI_OAUTH_CLIENT_ID = "honcho-cli"
 
 let pluginVersion: string | undefined
 
@@ -32,6 +38,8 @@ export type HonchoClientOptions = TelemetryOverrides & {
   apiKey: string
   baseUrl: string
   workspaceId: string
+  timeout?: number
+  maxRetries?: number
 }
 
 export const telemetryIdentity = (overrides: TelemetryOverrides = {}): TelemetryIdentity => ({
@@ -42,14 +50,23 @@ export const telemetryIdentity = (overrides: TelemetryOverrides = {}): Telemetry
   ...(overrides.model ? { model: overrides.model } : {}),
 })
 
-/**
- * Every Honcho client the plugin builds goes through here so the telemetry headers ride on
- * every request. The runtime builds one per hook, so the identity is always current.
- */
+/** Every Honcho client the plugin builds goes through here so the telemetry headers ride on every request. */
 export const createHonchoClient = (options: HonchoClientOptions) =>
   new Honcho({
     apiKey: options.apiKey || undefined,
     baseURL: options.baseUrl || undefined,
     workspaceId: options.workspaceId,
+    timeout: options.timeout,
+    maxRetries: options.maxRetries,
     defaultHeaders: telemetryHeaders(telemetryIdentity(options)),
   })
+
+/**
+ * Point a long-lived client at the current credential and agent model. Sessions and peers share
+ * the client's HTTP object, so they pick both up; an OAuth refresh supersedes the old token.
+ */
+export const refreshClient = (honcho: Honcho, apiKey: string, overrides: TelemetryOverrides = {}) => {
+  const http = honcho.http as unknown as { apiKey?: string; defaultHeaders: Record<string, string> }
+  http.apiKey = apiKey || undefined
+  setTelemetryHeaders(http.defaultHeaders, telemetryIdentity(overrides))
+}

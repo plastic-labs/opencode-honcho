@@ -1,6 +1,7 @@
 import { z } from "zod"
-import { createHonchoCore, ensureHonchoSkillInstalled, type HostAdapter, type HostLogLevel } from "../index.js"
+import { createHonchoCore, type HostAdapter, type HostLogLevel } from "../index.js"
 import { isRecord, timestampToIso } from "../core.js"
+import { createCommandMatcher, isGeneratedPrompt } from "./commands.js"
 import type { Model, Plugin } from "@opencode/plugin"
 
 type ModelRef = Model.Ref
@@ -64,10 +65,7 @@ export const setup = async (ctx: PluginContext) => {
     typeof ctx.options?.configPath === "string" ? ctx.options.configPath : process.env.OPENCODE_HONCHO_CONFIG_PATH || undefined
   const core = createHonchoCore(consoleHost(ctx.location.directory, ctx.location.project?.directory), configPath)
   core.setHostVersion(ctx.app.version)
-
-  // Prompt-specific recall per session. The v1 path appends it to the user message; on v2 the
-  // prompt hook's edits become the persisted user text, so it rides in the request context instead.
-  const pendingRecall = new Map<string, string>()
+  const trace = Boolean(process.env.OPENCODE_HONCHO_TRACE_EVENTS)
 
   const here = ctx.location.directory
   const sessionDirectories = new Map<string, string>()
@@ -77,39 +75,44 @@ export const setup = async (ctx: PluginContext) => {
     return (published ?? sessionDirectories.get(sessionID)) === here
   }
 
+  // `opencode run` creates its session before this instance's event stream is live, so
+  // session.created can be missed. The first prompt of a session not seen yet asks OpenCode
+  // for its directory and whether it is a subagent's (those are skipped).
+  const seen = new Set<string>()
+  const learnSession = async (sessionID: string) => {
+    if (seen.has(sessionID)) return
+    seen.add(sessionID)
+    try {
+      const info = await ctx.session.get({ sessionID })
+      core.noteSession(sessionID, info.location?.directory ?? null, info.parentID ?? null)
+    } catch (error) {
+      await core.log("debug", "Honcho could not read the OpenCode session.", {
+        sessionId: sessionID,
+        message: error instanceof Error ? error.message : String(error),
+      })
+    }
+  }
+
+  // 2.x sends a slash command's expansion through this same hook, untagged; see ./commands.ts.
+  const isCommandExpansion = createCommandMatcher(here)
+
   await ctx.session.hook("prompt", async (event) => {
     sessionDirectories.set(event.sessionID, here)
-    const text = typeof event.prompt.text === "string" ? event.prompt.text.trim() : ""
-    if (!text) return
-    const block = await core.captureUserPrompt(
-      { sessionID: event.sessionID },
-      text,
-      timestampToIso(Date.now()),
-      "session.prompt",
-    )
-    if (block) pendingRecall.set(event.sessionID, block)
-    await core.log("debug", "Honcho captured user prompt.", { sessionId: event.sessionID, recall: Boolean(block) })
+    await learnSession(event.sessionID)
+    const text = typeof event.prompt.text === "string" ? event.prompt.text : ""
+    if (trace) await core.log("debug", "prompt", { sessionId: event.sessionID, metadata: event.metadata ?? null, text: text.slice(0, 120) })
+    if (isGeneratedPrompt(event.metadata) || isCommandExpansion(text)) {
+      await core.log("debug", "Honcho skipped a generated or slash command prompt.", { sessionId: event.sessionID })
+      return
+    }
+    await core.captureUserPrompt(event.sessionID, text, timestampToIso(Date.now()), "session.prompt")
   })
 
+  // Directives and the peer card, fetched once per session; nothing else is added per request.
   await ctx.session.hook("context", async (event) => {
     core.rememberSessionModel(event.sessionID, modelId(event.model))
-    const blocks = await core.systemBlocks({ sessionID: event.sessionID })
-    if (blocks.length === 0) return
-    for (const text of blocks) event.system.push({ type: "text", text })
-    const recall = pendingRecall.get(event.sessionID)
-    if (recall) event.messages.push({ role: "user", content: [{ type: "text", text: recall }] })
-  })
-
-  await ctx.session.hook("compaction", async (event) => {
-    event.system.push({ type: "text", text: await core.continuityBlock({ sessionID: event.sessionID }) })
-  })
-
-  await ctx.shell.hook("create.before", async (event) => {
-    Object.assign(event.env, await core.shellEnv({}))
-  })
-
-  await ctx.tool.hook("execute.after", async (event) => {
-    await core.captureToolActivity(event.sessionID, event.tool, event.input, event.id, "tool.execute.after")
+    const block = await core.sessionStartBlock(event.sessionID)
+    if (block) event.system.push({ type: "text", text: block })
   })
 
   await ctx.tool.transform((editor) => {
@@ -132,7 +135,7 @@ export const setup = async (ctx: PluginContext) => {
     if (!sessionID) return
     const owned = ownsSession(event, sessionID)
     if (event.type === "session.deleted") sessionDirectories.delete(sessionID)
-    if (process.env.OPENCODE_HONCHO_TRACE_EVENTS) {
+    if (trace) {
       await core.log("debug", "event", {
         type: event.type,
         sessionId: sessionID,
@@ -144,9 +147,9 @@ export const setup = async (ctx: PluginContext) => {
     if (!owned) return
     switch (event.type) {
       case "session.created": {
-        // Best effort, never blocks startup, attempted even when Honcho is not configured.
-        void ensureHonchoSkillInstalled()
-        await core.hydrateSession({ sessionID })
+        seen.add(sessionID)
+        const sessionLocation = isRecord(data.location) ? str(data.location.directory) : null
+        await core.sessionCreated(sessionID, sessionLocation ?? here, str(data.parentID))
         return
       }
       case "session.step.started": {
@@ -157,15 +160,12 @@ export const setup = async (ctx: PluginContext) => {
       case "session.text.ended": {
         const messageId = str(data.assistantMessageID)
         const text = typeof data.text === "string" ? data.text : ""
-        if (messageId) await core.stashAssistantText(sessionID, messageId, String(data.ordinal ?? 0), text)
+        if (messageId) core.stashAssistantText(sessionID, messageId, String(data.ordinal ?? 0), text)
         return
       }
       case "session.step.ended": {
         const messageId = str(data.assistantMessageID)
-        if (messageId) {
-          const captured = await core.flushAssistantMessage(sessionID, messageId, timestampToIso(event.created), "event.session.step.ended")
-          if (captured) await core.log("debug", "Honcho captured assistant message.", { sessionId: sessionID, messageId })
-        }
+        if (messageId) await core.flushAssistantMessage(sessionID, messageId, timestampToIso(event.created), "event.session.step.ended")
         return
       }
       case "session.execution.succeeded":
@@ -173,24 +173,13 @@ export const setup = async (ctx: PluginContext) => {
       case "session.execution.failed": {
         // Turn boundary: flush anything a step did not close. On a stop, whatever the user saw
         // before it is what gets remembered.
-        for (const messageId of await core.pendingAssistantMessageIds(sessionID)) {
-          const captured = await core.flushAssistantMessage(sessionID, messageId, timestampToIso(event.created), `event.${event.type}`)
-          if (captured) await core.log("debug", "Honcho captured assistant message.", { sessionId: sessionID, messageId, event: event.type })
+        for (const messageId of core.pendingAssistantMessageIds(sessionID)) {
+          await core.flushAssistantMessage(sessionID, messageId, timestampToIso(event.created), `event.${event.type}`)
         }
         return
       }
       case "session.deleted": {
-        pendingRecall.delete(sessionID)
-        await core.dropSessionState({ sessionID })
-        return
-      }
-      case "session.compaction.ended": {
-        const handle = await core.deriveHandle({ sessionID })
-        await core.log("info", "Honcho lifecycle boundary observed.", {
-          event: event.type,
-          sessionId: handle.sessionId,
-          sessionKey: handle.sessionKey,
-        })
+        core.forgetSession(sessionID)
         return
       }
       default:

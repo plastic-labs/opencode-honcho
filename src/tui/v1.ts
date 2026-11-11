@@ -1,8 +1,7 @@
-import path from "node:path"
 import type { TuiPlugin, TuiPluginApi } from "@opencode-ai/plugin/tui"
 import { transcriptSourceFromV1Client } from "../import.js"
-import { COMMANDS, maybePromptObservationUpgrade, runGuarded } from "./commands.js"
-import type { Dialogs, GlobalSettings, TuiSession } from "./dialogs.js"
+import { COMMANDS, runGuarded } from "./commands.js"
+import type { Dialogs, TuiSession } from "./dialogs.js"
 
 const settle = <T>(resolve: (value: T) => void) => {
   let done = false
@@ -96,25 +95,16 @@ export const dialogsFromV1 = (api: TuiPluginApi): Dialogs => ({
     }),
 })
 
-export const deriveLiveStatus = (api: TuiPluginApi, settings: GlobalSettings) => {
-  const openCodeSessionId =
+export const deriveLiveStatus = (api: TuiPluginApi) => ({
+  openCodeSessionId:
     api.route?.current?.name === "session" && typeof api.route.current.params?.sessionID === "string"
       ? api.route.current.params.sessionID
-      : undefined
-  const configuredWorkspace = settings.hosts?.opencode?.workspace
-  const liveWorkspace =
-    typeof configuredWorkspace === "string" && configuredWorkspace.trim()
-      ? configuredWorkspace.trim()
-      : path.basename(api.state?.path?.worktree || api.state?.path?.directory || "opencode")
-  return {
-    workspaceName: liveWorkspace,
-    openCodeSessionId,
-  }
-}
+      : undefined,
+})
 
 export const sessionFromV1 = (api: TuiPluginApi): TuiSession => ({
   dialogs: dialogsFromV1(api),
-  liveStatus: (settings) => deriveLiveStatus(api, settings),
+  liveStatus: () => deriveLiveStatus(api),
   transcripts: transcriptSourceFromV1Client(api.client),
 })
 
@@ -132,5 +122,4 @@ export const buildCommands = (api: TuiPluginApi) =>
 
 export const tui: TuiPlugin = async (api) => {
   api.command?.register(() => buildCommands(api))
-  void maybePromptObservationUpgrade(sessionFromV1(api))
 }

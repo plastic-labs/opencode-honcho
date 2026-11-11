@@ -1,24 +1,16 @@
-import path from "node:path"
 import type { Plugin as PluginV2 } from "@opencode/plugin/tui"
 import type { KeymapCommand as TuiKeymapCommand } from "@opencode/plugin/tui/context"
 import { transcriptSourceFromV2Client } from "../import.js"
-import { COMMANDS, maybePromptObservationUpgrade, runGuarded } from "./commands.js"
-import type { Dialogs, GlobalSettings, TuiSession } from "./dialogs.js"
+import { COMMANDS, runGuarded } from "./commands.js"
+import type { Dialogs, TuiSession } from "./dialogs.js"
 
 type TuiContext = PluginV2.Context
 
 export const sessionFromV2 = (context: TuiContext): TuiSession => ({
   dialogs: context.ui.dialog as Dialogs,
-  liveStatus: (settings: GlobalSettings) => {
+  liveStatus: () => {
     const route = context.ui.router.current()
-    const configuredWorkspace = settings.hosts?.opencode?.workspace
-    return {
-      workspaceName:
-        typeof configuredWorkspace === "string" && configuredWorkspace.trim()
-          ? configuredWorkspace.trim()
-          : path.basename(context.location?.directory || "opencode"),
-      openCodeSessionId: route.type === "session" && typeof route.sessionID === "string" ? route.sessionID : undefined,
-    }
+    return { openCodeSessionId: route.type === "session" && typeof route.sessionID === "string" ? route.sessionID : undefined }
   },
   transcripts: transcriptSourceFromV2Client(context.client),
 })
@@ -44,5 +36,4 @@ export const setup = async (context: TuiContext) => {
       return undefined
     },
   })
-  void maybePromptObservationUpgrade(sessionFromV2(context))
 }

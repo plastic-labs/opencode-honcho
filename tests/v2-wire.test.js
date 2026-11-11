@@ -72,6 +72,7 @@ describe("OpenCode 2 entrypoints", () => {
     expect(typeof mod.default.setup).toBe("function")
     expect(mod.__testing.buildCommandsV2({}).map((c) => c.slash.name)).toEqual([
       "honcho:setup",
+      "honcho:login",
       "honcho:status",
       "honcho:settings",
       "honcho:config",
@@ -79,46 +80,71 @@ describe("OpenCode 2 entrypoints", () => {
     ])
   })
 
-  test("setup registers hooks, tools, and injects the system instruction", async () => {
+  test("setup registers hooks and tools, and injects directives + peer card once", async () => {
     const home = await mkdtemp(path.join(os.tmpdir(), "honcho-v2-"))
     const configPath = path.join(home, "config.json")
-    await writeFile(configPath, JSON.stringify({ peerName: "wire", baseUrl: "http://127.0.0.1:9", hosts: { opencode: { recallMode: "tools" } } }))
+    await writeFile(configPath, JSON.stringify({ hosts: { opencode: { apiKey: "test-key", peerName: "wire" } } }))
+    const saved = { key: process.env.HONCHO_API_KEY, url: process.env.HONCHO_BASE_URL }
+    delete process.env.HONCHO_API_KEY
+    delete process.env.HONCHO_BASE_URL
+    const realFetch = globalThis.fetch
+    const paths = []
+    globalThis.fetch = async (url, init = {}) => {
+      const { pathname } = new URL(String(url))
+      paths.push(pathname)
+      const body = typeof init.body === "string" ? JSON.parse(init.body) : {}
+      const payload = pathname.endsWith("/card")
+        ? { peer_card: ["Likes tea"] }
+        : pathname.endsWith("/list")
+          ? { items: [], total: 0, page: 1, size: 1, pages: 0 }
+          : { id: body.id, metadata: {}, configuration: {}, created_at: new Date(0).toISOString(), is_active: true }
+      return new Response(JSON.stringify(payload), { headers: { "content-type": "application/json" } })
+    }
+    try {
+      const { ctx, hooks, tools, find } = fakeContext()
+      ctx.options = { configPath }
+      const mod = await import("../dist/server.js")
+      const cleanup = await mod.default.setup(ctx)
 
-    const { ctx, hooks, tools, find } = fakeContext()
-    ctx.options = { configPath }
-    const mod = await import("../dist/server.js")
-    const cleanup = await mod.default.setup(ctx)
+      expect(hooks.session.map((h) => h.name).sort()).toEqual(["context", "prompt"])
+      expect(hooks.tool).toEqual([])
+      expect(hooks.shell).toEqual([]) // no HONCHO_* variables in shell tools
+      expect(tools.map((t) => t.name).sort()).toEqual([
+        "honcho_chat",
+        "honcho_create_conclusion",
+        "honcho_get_config",
+        "honcho_search",
+        "honcho_set_config",
+        "honcho_setup",
+        "honcho_status",
+      ])
+      // zod 4 objects implement Standard Schema, which v2 accepts as a tool input schema.
+      expect(typeof tools[0].input["~standard"]).toBe("object")
 
-    expect(hooks.session.map((h) => h.name).sort()).toEqual(["compaction", "context", "prompt"])
-    expect(hooks.tool.map((h) => h.name)).toEqual(["execute.after"])
-    expect(hooks.shell.map((h) => h.name)).toEqual(["create.before"])
-    expect(tools.map((t) => t.name).sort()).toEqual([
-      "honcho_chat",
-      "honcho_create_conclusion",
-      "honcho_get_config",
-      "honcho_search",
-      "honcho_set_config",
-      "honcho_setup",
-      "honcho_status",
-    ])
-    // zod 4 objects implement Standard Schema, which v2 accepts as a tool input schema.
-    expect(typeof tools[0].input["~standard"]).toBe("object")
+      const request = () => ({ sessionID: "ses_wire", agent: "build", model: { providerID: "anthropic", id: "claude" }, system: [], messages: [], options: {}, tools: {} })
+      const first = request()
+      const second = request()
+      await find(hooks.session, "context")(first)
+      await find(hooks.session, "context")(second)
+      expect(first.system).toHaveLength(1)
+      expect(first.system[0].text).toContain("call `honcho_chat`")
+      expect(first.system[0].text).toContain("Profile: Likes tea")
+      expect(second.system).toEqual(first.system)
+      expect(first.messages).toEqual([]) // nothing rides along per request
+      expect(paths.filter((p) => p.endsWith("/card"))).toHaveLength(1)
 
-    const context = { sessionID: "ses_wire", agent: "build", model: { providerID: "anthropic", id: "claude" }, system: [], messages: [], options: {}, tools: {} }
-    await find(hooks.session, "context")(context)
-    expect(context.system).toHaveLength(1) // recallMode=tools: instruction only, no snapshot
-    expect(context.system[0].text).toContain("## Honcho Memory")
+      const status = JSON.parse(await tools.find((t) => t.name === "honcho_status").execute({}, { sessionID: "ses_wire" }).then((r) => r.content))
+      expect(status.telemetry.hostVersion).toBe("2.0.16")
+      expect(status.configured).toBe(true)
+      expect(status.session.honchoSessionId).toBe("ses_wire")
 
-    const shell = { command: "ls", cwd: home, timeout: 1, shell: "sh", env: {} }
-    await find(hooks.shell, "create.before")(shell)
-    expect(shell.env.HONCHO_URL).toBe("http://127.0.0.1:9")
-
-    const status = JSON.parse(await tools.find((t) => t.name === "honcho_status").execute({}, { sessionID: "ses_wire" }).then((r) => r.content))
-    expect(status.telemetry.hostVersion).toBe("2.0.16")
-    expect(status.configured).toBe(true)
-
-    expect(typeof cleanup).toBe("function")
-    await cleanup()
+      expect(typeof cleanup).toBe("function")
+      await cleanup()
+    } finally {
+      globalThis.fetch = realFetch
+      if (saved.key !== undefined) process.env.HONCHO_API_KEY = saved.key
+      if (saved.url !== undefined) process.env.HONCHO_BASE_URL = saved.url
+    }
   })
 })
 
@@ -144,6 +170,7 @@ describe("OpenCode 2 cleanup", () => {
       const { ctx, emit } = fakeContext()
       ctx.options = { configPath }
       const cleanup = await (await import("../dist/server.js")).default.setup(ctx)
+      await emit("session.text.ended", { sessionID: "ses_a", assistantMessageID: "msg_a", text: "reply" }, ctx.location.directory)
       await emit("session.step.ended", { sessionID: "ses_a", assistantMessageID: "msg_a" }, ctx.location.directory)
       while (requests === 0) await new Promise((resolve) => setTimeout(resolve, 5))
 

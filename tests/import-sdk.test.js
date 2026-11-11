@@ -34,8 +34,6 @@ test("import walks every project with scope=project and reads whole transcripts 
   const plan = await planOpenCodeImport({
     client,
     workspaceId: "ws",
-    sessionStrategy: "per-session",
-    agentPeerId: "opencode",
     statePath: path.join(dir, "state.json"),
     days: 7,
     includeMessages: true,
@@ -45,6 +43,7 @@ test("import walks every project with scope=project and reads whole transcripts 
   expect(calls[0]).toMatchObject({ scope: "project", roots: true, limit: expect.any(Number) })
   expect(calls[0].start).toBeGreaterThan(now - 8 * 86_400_000)
   expect(calls[2]).toEqual({ sessionID: "a" })
+  expect(plan.sessions[0].honchoSessionKey).toBe("a") // the OpenCode session id
   expect(plan.sessions[0].messages).toEqual([
     { role: "user", content: "hello", createdAt: new Date(now).toISOString() },
     { role: "assistant", content: "hi back", createdAt: new Date(now + 1).toISOString() },
@@ -84,8 +83,6 @@ test("v2 source pages sessions newest-first until the window, then reads transcr
   const plan = await planOpenCodeImport({
     source: transcriptSourceFromV2Client(client),
     workspaceId: "ws",
-    sessionStrategy: "per-session",
-    agentPeerId: "opencode",
     statePath: path.join(dir, "state.json"),
     days: 7,
     includeMessages: true,
