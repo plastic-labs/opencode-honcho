@@ -3,17 +3,7 @@ import path from "node:path"
 import type { TuiPlugin } from "@opencode-ai/plugin/tui"
 import type { Plugin as TuiPluginV2 } from "@opencode/plugin/tui"
 import { Honcho } from "@honcho-ai/sdk"
-import {
-  SHARED_SETTINGS_DIR_NAME,
-  clampText,
-  deriveSessionScope,
-  findProjectRoot,
-  honchoSessionKey,
-  isRecord,
-  timestampToIso,
-  userHomeDir,
-  type SessionStrategy,
-} from "./core.js"
+import { PEER_CONFIG, chunkContent, honchoSessionId, isRecord, timestampToIso, userHomeDir } from "./core.js"
 
 /** OpenCode 1.x SDK client, as handed to the TUI plugin. */
 export type OpenCodeClient = Parameters<TuiPlugin>[0]["client"]
@@ -82,13 +72,12 @@ type ImportState = {
 
 const IMPORT_STATE_FILE_NAME = "opencode-import-state.json"
 const IMPORT_SOURCE = "opencode-sdk"
-const MAX_IMPORT_MESSAGE_CHARS = 25_000
 const ADD_MESSAGES_BATCH = 40
 const SESSION_LIST_LIMIT = 10_000
 
 export const defaultImportStatePath = () =>
   process.env.HONCHO_IMPORT_STATE_PATH ||
-  path.join(userHomeDir(), SHARED_SETTINGS_DIR_NAME, IMPORT_STATE_FILE_NAME)
+  path.join(userHomeDir(), ".honcho", IMPORT_STATE_FILE_NAME)
 
 const importStateKey = (workspaceId: string, sessionId: string) => `${workspaceId}::${sessionId}`
 
@@ -111,31 +100,6 @@ const saveImportState = async (statePath: string, state: ImportState) => {
   await writeFile(statePath, `${JSON.stringify(state, null, 2)}\n`, "utf-8")
 }
 
-const importedSessionKey = async ({
-  workspaceId,
-  sessionStrategy,
-  directory,
-  sessionId,
-  agentPeerId,
-}: {
-  workspaceId: string
-  sessionStrategy: SessionStrategy
-  directory: string
-  sessionId: string
-  agentPeerId: string
-}) => {
-  const rootDir = findProjectRoot(directory)
-  const scope = await deriveSessionScope({
-    workspaceId,
-    sessionStrategy,
-    rootDir,
-    repoName: path.basename(rootDir),
-    currentDirectory: directory,
-    sessionId,
-  })
-  return honchoSessionKey(sessionStrategy, scope, [agentPeerId])
-}
-
 const unwrap = <T>(result: { data?: T; error?: unknown }, what: string): T => {
   if (result.error !== undefined || result.data === undefined) {
     const detail =
@@ -152,7 +116,7 @@ const unwrap = <T>(result: { data?: T; error?: unknown }, what: string): T => {
 const extractTextFromParts = (parts: OpenCodePart[]) => {
   const texts: string[] = []
   for (const part of parts) {
-    if (part.type !== "text" || part.ignored === true) continue
+    if (part.type !== "text" || part.ignored === true || part.synthetic === true) continue
     const text = part.text.trim()
     if (text) texts.push(text)
   }
@@ -162,7 +126,7 @@ const extractTextFromParts = (parts: OpenCodePart[]) => {
 const extractImportMessages = (page: OpenCodeMessagePage): ImportMessage[] => {
   const out: ImportMessage[] = []
   for (const { info, parts } of page) {
-    const content = clampText(extractTextFromParts(parts), MAX_IMPORT_MESSAGE_CHARS)
+    const content = extractTextFromParts(parts)
     if (!content) continue
     out.push({ role: info.role, content, createdAt: timestampToIso(info.time.created) })
   }
@@ -269,7 +233,7 @@ export const transcriptSourceFromV2Client = (client: OpenCodeClientV2): Transcri
                   .filter(Boolean)
                   .join("\n")
               : ""
-        const content = clampText(text.trim(), MAX_IMPORT_MESSAGE_CHARS)
+        const content = text.trim()
         if (!content) continue
         messages.push({
           role: message.type === "user" ? "user" : "assistant",
@@ -288,8 +252,6 @@ export type PlanImportOptions = {
   client?: OpenCodeClient
   source?: TranscriptSource
   workspaceId: string
-  sessionStrategy: SessionStrategy
-  agentPeerId: string
   statePath?: string
   days?: number
   includeSubagents?: boolean
@@ -317,13 +279,7 @@ export const planOpenCodeImport = async (options: PlanImportOptions): Promise<Im
       id: row.id,
       title: row.title,
       directory: row.directory,
-      honchoSessionKey: await importedSessionKey({
-        workspaceId: options.workspaceId,
-        sessionStrategy: options.sessionStrategy,
-        directory: row.directory,
-        sessionId: row.id,
-        agentPeerId: options.agentPeerId,
-      }),
+      honchoSessionKey: honchoSessionId(row.id),
       timeUpdated: row.timeUpdated,
       messageCount: messages.length,
       alreadyImported,
@@ -347,10 +303,9 @@ export const planOpenCodeImport = async (options: PlanImportOptions): Promise<Im
   }
 }
 
-const addMessagesBatched = async (
-  session: Awaited<ReturnType<Honcho["session"]>>,
-  messages: ReturnType<Awaited<ReturnType<Honcho["peer"]>>["message"]>[],
-) => {
+type MessageInput = { peerId: string; content: string; createdAt?: string; metadata: Record<string, unknown> }
+
+const addMessagesBatched = async (session: Awaited<ReturnType<Honcho["session"]>>, messages: MessageInput[]) => {
   for (let index = 0; index < messages.length; index += ADD_MESSAGES_BATCH) {
     await session.addMessages(messages.slice(index, index + ADD_MESSAGES_BATCH))
   }
@@ -359,7 +314,7 @@ const addMessagesBatched = async (
 export type ExecuteImportOptions = PlanImportOptions & {
   honcho: Honcho
   userPeerId: string
-  agentObserveMe: boolean
+  agentPeerId: string
   statePath?: string
 }
 
@@ -367,10 +322,6 @@ export const executeOpenCodeImport = async (options: ExecuteImportOptions): Prom
   const plan = await planOpenCodeImport({ ...options, includeMessages: true })
   const statePath = options.statePath || defaultImportStatePath()
   const state = await loadImportState(statePath)
-  const userPeer = await options.honcho.peer(options.userPeerId, { configuration: { observeMe: true } })
-  const agentPeer = await options.honcho.peer(options.agentPeerId, {
-    configuration: { observeMe: options.agentObserveMe === true },
-  })
 
   let uploadedSessions = 0
   let uploadedMessages = 0
@@ -379,22 +330,21 @@ export const executeOpenCodeImport = async (options: ExecuteImportOptions): Prom
   for (const sessionPlan of plan.sessions) {
     if (sessionPlan.skippedReason || !sessionPlan.messages) continue
     try {
-      const session = await options.honcho.session(sessionPlan.honchoSessionKey)
-      await session.addPeers([
-        [options.userPeerId, { observeMe: true, observeOthers: false }],
-        [options.agentPeerId, { observeMe: options.agentObserveMe === true, observeOthers: true }],
-      ] as never)
-      const payload = sessionPlan.messages.map((message) => {
-        const peer = message.role === "user" ? userPeer : agentPeer
-        return peer.message(message.content, {
-          createdAt: message.createdAt,
-          metadata: {
-            backfill: true,
-            source: IMPORT_SOURCE,
-            openCodeSessionId: sessionPlan.id,
-          },
-        })
+      const session = await options.honcho.session(sessionPlan.honchoSessionKey, {
+        peers: [
+          [options.userPeerId, { ...PEER_CONFIG }],
+          [options.agentPeerId, { ...PEER_CONFIG }],
+        ],
       })
+      // Long messages are split into [Part i/N] messages, never truncated.
+      const payload = sessionPlan.messages.flatMap((message) =>
+        chunkContent(message.content).map((content) => ({
+          peerId: message.role === "user" ? options.userPeerId : options.agentPeerId,
+          content,
+          ...(message.createdAt ? { createdAt: message.createdAt } : {}),
+          metadata: { backfill: true, source: IMPORT_SOURCE, openCodeSessionId: sessionPlan.id },
+        })),
+      )
       await addMessagesBatched(session, payload)
       state.imported[importStateKey(options.workspaceId, sessionPlan.id)] = sessionPlan.timeUpdated
       await saveImportState(statePath, state)

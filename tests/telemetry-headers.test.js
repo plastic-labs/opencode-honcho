@@ -18,9 +18,12 @@ test("every Honcho request carries host, plugin, and current agent model telemet
   globalThis.fetch = async (url, init = {}) => {
     calls.push(new Headers(init.headers))
     const body = typeof init.body === "string" ? JSON.parse(init.body) : {}
-    const payload = /\/messages$/.test(new URL(url).pathname)
+    const { pathname } = new URL(url)
+    const payload = /\/messages$/.test(pathname)
       ? []
-      : { id: body.id, metadata: {}, configuration: {}, created_at: new Date(0).toISOString(), is_active: true }
+      : pathname.endsWith("/list")
+        ? { items: [], total: 0, page: 1, size: 1, pages: 0 }
+        : { id: body.id, metadata: {}, configuration: {}, created_at: new Date(0).toISOString(), is_active: true }
     return new Response(JSON.stringify(payload), { headers: { "content-type": "application/json" } })
   }
   const since = (start) => calls.slice(start)
@@ -36,7 +39,7 @@ test("every Honcho request carries host, plugin, and current agent model telemet
     })
 
     // OpenCode never hands the plugin its version; Session.version on session.created names it.
-    await hooks.event({ event: { type: "session.created", properties: { info: { id: "ses_test", version: "1.18.23" } } } })
+    await hooks.event({ event: { type: "session.created", properties: { info: { id: "ses_test", directory: rootDir, version: "1.18.23" } } } })
     expect(calls.length).toBeGreaterThan(0)
     for (const headers of calls) {
       expect(headers.get("X-Honcho-Host")).toBe(`opencode/1.18.23 (${process.platform})`)
@@ -55,6 +58,9 @@ test("every Honcho request carries host, plugin, and current agent model telemet
 
     // The completed assistant message names the model that answered, so a mid-session switch is tracked.
     start = calls.length
+    await hooks.event({
+      event: { type: "message.part.updated", properties: { part: { id: "p1", sessionID: "ses_test", messageID: "msg_1", type: "text", text: "hello" } } },
+    })
     await hooks.event({
       event: {
         type: "message.updated",

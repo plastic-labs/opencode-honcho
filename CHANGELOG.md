@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Settings live only in `hosts.opencode` (`apiKey` or a `/honcho:login` sign-in, `peerName`, `workspace`, `aiPeer`, `baseUrl`); on first start, older configs get the key, server, workspace and peer the old version used written there, so memory stays under the same `user-<peerName>` peer. `recallMode`, `observationMode`, `sessionStrategy`, `removeUserPrefix` and `agentObserveMe` are gone.
+- One Honcho session per OpenCode session, joined to the repository and host scopes when created. Every user and assistant message is saved (long ones split into parts); slash commands (including their expansions on 2.x), goal and scheduled prompts, subagent prompts and tool summaries are not.
+- Memory is injected once per session (directives and your peer card); `honcho_chat` takes `scope`, `workspace` and `reasoning_level`. Per-turn recall, automatic conclusions and the `HONCHO_*` shell variables are removed.
+
 ## 0.2.1
 
 - OpenCode 2.x: act only on sessions that belong to the plugin instance's location. OpenCode 2 runs one plugin instance per location but its event stream is server-wide, so with several directories open each assistant reply was hydrated and captured once per directory and landed in every per-directory Honcho session. Events without a location (`session.execution.*`) follow the directory recorded for their session (#55).

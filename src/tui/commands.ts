@@ -1,280 +1,271 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises"
-import path from "node:path"
-import { createHonchoClient } from "../honcho-client.js"
+import {
+  DEFAULT_BASE_URL,
+  OAuthError,
+  isCloud,
+  normalizeBaseUrl,
+  pollForToken,
+  requestDeviceCode,
+  saveGrant,
+  saveHost,
+  suggestPeerName,
+  type HostConfig,
+  type OAuthTransport,
+} from "@honcho-ai/harness-plugin-core"
+import { CLI_OAUTH_CLIENT_ID, OAUTH_CLIENT_ID, createHonchoClient } from "../honcho-client.js"
 import { executeOpenCodeImport, planOpenCodeImport } from "../import.js"
 import {
-  DEFAULT_SETTINGS,
-  SETTING_ENUMS,
-  directionalKeepFollowUp,
-  getNestedValue,
-  isLocalBaseUrl,
-  isObservationMode,
+  HOST,
+  HOST_FIELDS,
+  honchoSessionId,
+  hostFieldPatch,
   isRecord,
-  needsObservationUpgradePrompt,
-  observationUpgradeNotice,
-  resolveBaseUrl,
-  resolveSessionPeerIds,
-  sharedConfigPath,
-  unifiedImportFollowUp,
-  type ObservationMode,
+  loadSettings,
+  migrateConfig,
+  readConfig,
+  resolveConfigPath,
+  LEGACY,
+  type HostField,
+  type Settings,
 } from "../core.js"
-import type { DialogOption, GlobalSettings, TuiCommandSpec, TuiSession } from "./dialogs.js"
+import type { TuiCommandSpec, TuiSession } from "./dialogs.js"
 
-export const resolveConfigPath = () => sharedConfigPath(process.env.OPENCODE_HONCHO_CONFIG_PATH)
+export { resolveConfigPath }
 
-const SHARED_CONFIG_PRESETS: Record<string, readonly string[]> = Object.fromEntries(
-  Object.entries(SETTING_ENUMS).map(([key, values]) => [key.toLowerCase(), values]),
-)
-
-const MODE_EDITABLE_FIELD_PATHS = [
-  "apiKey",
-  "baseUrl",
-  "peerName",
-  "hosts.opencode.workspace",
-  "hosts.opencode.aiPeer",
-  "hosts.opencode.recallMode",
-  "hosts.opencode.observationMode",
-  "hosts.opencode.agentObserveMe",
-  "hosts.opencode.sessionStrategy",
-] as const
-
-export const readGlobalSettings = async (): Promise<GlobalSettings> => {
+/** Settings after moving an older config into hosts.opencode, the same way the runtime does. */
+const currentSettings = async (refresh = false) => {
   const configPath = resolveConfigPath()
-  try {
-    const raw = await readFile(configPath, "utf-8")
-    const parsed = JSON.parse(raw)
-    return isRecord(parsed) ? (parsed as GlobalSettings) : {}
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return {}
-    }
-    throw error
-  }
+  await migrateConfig(configPath)
+  return loadSettings(configPath, { refresh })
 }
 
-export const readSharedConfig = async (): Promise<Record<string, unknown> | null> => {
-  const configPath = resolveConfigPath()
-  try {
-    const raw = await readFile(configPath, "utf-8")
-    const parsed = JSON.parse(raw)
-    if (!isRecord(parsed)) {
-      throw new Error(`${configPath} must contain a JSON object at the top level.`)
-    }
-    return parsed
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return null
-    }
-    throw error
-  }
+const hostBlock = (configPath: string): Record<string, unknown> => {
+  const file = readConfig(configPath)
+  const hosts = isRecord(file.hosts) ? file.hosts : {}
+  return isRecord(hosts[HOST]) ? hosts[HOST] : {}
 }
 
-export const writeSharedConfig = async (settings: Record<string, unknown>) => {
-  const configPath = resolveConfigPath()
-  await mkdir(path.dirname(configPath), { recursive: true })
-  await writeFile(configPath, `${JSON.stringify(settings, null, 2)}\n`, "utf-8")
-  return configPath
+export const describeAuth = (s: Pick<Settings, "auth" | "baseUrl">) => {
+  const auth = s.auth
+  if (!auth) return isCloud(s.baseUrl) ? "not signed in" : "none (self-hosted without auth)"
+  if (auth.source === "env") return "HONCHO_API_KEY env var"
+  if (auth.source === "apiKey") return "API key"
+  if (auth.reauthRequired) return "Honcho sign-in expired; run /honcho:login"
+  const minutes = auth.expiresAt ? Math.round((auth.expiresAt - Date.now() / 1000) / 60) : 0
+  return minutes > 0 ? `signed in with Honcho (token refreshes in ${minutes}m)` : "signed in with Honcho (token refreshes on next use)"
 }
 
-const listSharedConfigFields = (value: Record<string, unknown>, prefix = ""): string[] =>
-  Object.entries(value).flatMap(([key, entryValue]) => {
-    const nextKey = prefix ? `${prefix}.${key}` : key
-    if (isRecord(entryValue) && Object.keys(entryValue).length > 0) {
-      return listSharedConfigFields(entryValue, nextKey)
-    }
-    return [nextKey]
-  })
+export const statusMessage = (s: Settings, live: { openCodeSessionId?: string } = {}) =>
+  [
+    `Configured: ${s.configured ? "yes" : "no"}`,
+    `Auth: ${describeAuth(s)}`,
+    `Base URL: ${s.baseUrl}${isCloud(s.baseUrl) ? " (Honcho Cloud)" : " (self-hosted)"}`,
+    `Workspace: ${s.workspace}`,
+    `Peer name: ${s.peerName}`,
+    `AI peer: ${s.aiPeer}`,
+    ...(live.openCodeSessionId ? [`Honcho session: ${honchoSessionId(live.openCodeSessionId)}`] : []),
+    `Config: hosts.${HOST} in ${s.configPath}`,
+    "",
+    s.configured ? "Honcho is ready for OpenCode." : "Run /honcho:setup or /honcho:login to finish configuration.",
+    ...s.warnings.map((warning) => `\n${warning} Run \`honcho doctor\` to fix it.`),
+  ].join("\n")
 
-const setNestedValue = (value: Record<string, unknown>, fieldPath: string, nextValue: unknown) => {
-  const parts = fieldPath.split(".")
-  let current: Record<string, unknown> = value
-  for (const part of parts.slice(0, -1)) {
-    const existing = current[part]
-    if (!isRecord(existing)) {
-      current[part] = {}
-    }
-    current = current[part] as Record<string, unknown>
-  }
-  current[parts.at(-1) as string] = nextValue
+/** What is saved in hosts.opencode, with secrets masked. */
+export const settingsMessage = (configPath: string) => {
+  const block = hostBlock(configPath)
+  const oauth = isRecord(block.oauth) ? block.oauth : null
+  const show = (key: string) => (typeof block[key] === "string" && block[key] ? String(block[key]) : "(default)")
+  return [
+    `Config: hosts.${HOST} in ${configPath}`,
+    `apiKey: ${typeof block.apiKey === "string" && block.apiKey ? "set" : "not set"}`,
+    `oauth: ${oauth ? `signed in (client ${String(oauth.clientId || "?")})` : "not signed in"}`,
+    `peerName: ${show("peerName")}`,
+    `workspace: ${show("workspace")}`,
+    `aiPeer: ${show("aiPeer")}`,
+    `baseUrl: ${typeof block.baseUrl === "string" && block.baseUrl ? block.baseUrl : `(Honcho Cloud, ${DEFAULT_BASE_URL})`}`,
+  ].join("\n")
 }
-
-export const resolveSharedConfigField = (config: Record<string, unknown>, field: string) => {
-  const canonical = listSharedConfigFields(config).find(
-    (candidate) => candidate.toLowerCase() === field.trim().toLowerCase(),
-  )
-  if (!canonical) {
-    throw new Error(`Field '${field}' does not exist in ${resolveConfigPath()}.`)
-  }
-  return canonical
-}
-
-export const modeEditableFieldPaths = () => [...MODE_EDITABLE_FIELD_PATHS]
-
-export const sharedConfigPresetOptions = (fieldPath: string, currentValue: unknown) => {
-  const presetKey = fieldPath.split(".").at(-1)?.toLowerCase() || fieldPath.toLowerCase()
-  if (SHARED_CONFIG_PRESETS[presetKey]) {
-    return [...SHARED_CONFIG_PRESETS[presetKey]]
-  }
-  if (typeof currentValue === "boolean") {
-    return ["true", "false"]
-  }
-  return []
-}
-
-const parseSharedConfigValue = (currentValue: unknown, rawValue: string) => {
-  const trimmed = rawValue.trim()
-  if (typeof currentValue === "boolean") {
-    return trimmed.toLowerCase() === "true"
-  }
-  if (typeof currentValue === "number") {
-    const parsed = Number(trimmed)
-    if (!Number.isFinite(parsed)) {
-      throw new Error(`Expected a number for this field, received '${rawValue}'.`)
-    }
-    return parsed
-  }
-  return trimmed
-}
-
-const writeGlobalSettings = async (settings: GlobalSettings) => {
-  const configPath = resolveConfigPath()
-  await mkdir(path.dirname(configPath), { recursive: true })
-  await writeFile(configPath, `${JSON.stringify(settings, null, 2)}\n`, "utf-8")
-  return configPath
-}
-
-export const normalizeSettings = (settings: GlobalSettings) => ({
-  baseUrl: resolveBaseUrl(settings as Record<string, unknown>) || DEFAULT_SETTINGS.baseUrl,
-  apiKey: typeof settings.apiKey === "string" && settings.apiKey.trim() ? settings.apiKey.trim() : "",
-  peerName: typeof settings.peerName === "string" ? settings.peerName.trim() : "",
-})
 
 export const validateCloudApiKey = (value: string) =>
-  value.trim() ? null : "Honcho Cloud requires a Honcho API key. Enter a non-empty key or choose Self-hosted / local."
+  value.trim() ? null : "Honcho Cloud requires a Honcho API key. Enter a non-empty key, or sign in with /honcho:login."
 
-export const statusMessage = (
-  settings: GlobalSettings,
-  liveStatus?: { workspaceName?: string; openCodeSessionId?: string },
-) => {
-  const normalized = normalizeSettings(settings)
-  const configured = Boolean(normalized.apiKey) || isLocalBaseUrl(normalized.baseUrl)
-  const deployment = isLocalBaseUrl(normalized.baseUrl)
-    ? "Local / self-hosted"
-    : normalized.baseUrl === DEFAULT_SETTINGS.baseUrl
-      ? "Honcho Cloud"
-      : "Custom endpoint"
-  return [
-    `Configured: ${configured ? "yes" : "no"}`,
-    `Deployment: ${deployment}`,
-    `Base URL: ${normalized.baseUrl}`,
-    `API key: ${normalized.apiKey ? "set" : "not set"}`,
-    `Peer name: ${normalized.peerName || "user"}`,
-    ...(liveStatus?.workspaceName ? [`Workspace: ${liveStatus.workspaceName}`] : []),
-    ...(liveStatus?.openCodeSessionId ? [`OpenCode session: ${liveStatus.openCodeSessionId}`] : []),
-    `Config path: ${resolveConfigPath()}`,
-    "",
-    configured ? "Honcho is ready for OpenCode." : "Run /honcho:setup to finish configuration.",
-    ...(configured && needsObservationUpgradePrompt(settings as Record<string, unknown>)
-      ? ["", observationUpgradeNotice()]
-      : []),
-  ].join("\n")
-}
+const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
-export const settingsMessage = (settings: GlobalSettings) => {
-  const host = settings.hosts?.opencode || {}
-  return [
-    `Config path: ${resolveConfigPath()}`,
-    `API key: ${settings.apiKey?.trim() ? "set" : "not set"}`,
-    `Peer name: ${settings.peerName?.trim() || "user"}`,
-    `Base URL: ${resolveBaseUrl(settings as Record<string, unknown>) || DEFAULT_SETTINGS.baseUrl}`,
-    `Workspace: ${host.workspace || DEFAULT_SETTINGS.workspace}`,
-    `AI peer: ${host.aiPeer || DEFAULT_SETTINGS.aiPeer}`,
-    `Recall mode: ${host.recallMode || DEFAULT_SETTINGS.recallMode}`,
-    `Observation mode: ${host.observationMode || DEFAULT_SETTINGS.observationMode}`,
-    `Agent observe me: ${host.agentObserveMe === true ? "true" : "false"}`,
-    `Session strategy: ${host.sessionStrategy || DEFAULT_SETTINGS.sessionStrategy}`,
-    ...(!isObservationMode(settings.hosts?.opencode?.observationMode) && settings.hosts?.opencode
-      ? ["", observationUpgradeNotice()]
-      : []),
-  ].join("\n")
-}
-
-const persistHostObservationMode = async (mode: ObservationMode) => {
-  const config = (await readSharedConfig()) ?? {}
-  const hosts = isRecord(config.hosts) ? { ...config.hosts } : {}
-  const host = isRecord(hosts.opencode) ? hosts.opencode : {}
-  hosts.opencode = { ...host, observationMode: mode }
-  config.hosts = hosts
-  return writeSharedConfig(config)
-}
-
-const observationUpgradeOptions = (): DialogOption<string>[] => [
-  { title: "Switch to unified", value: "unified", description: "shared self-collection" },
-  { title: "Keep directional", value: "directional", description: "split memory between agents" },
-]
-
-export const saveSettings = async (partial: Partial<GlobalSettings>) => {
-  const current = await readGlobalSettings()
-  const sharedRaw = (await readSharedConfig()) ?? {}
-  const partialHost = partial.hosts?.opencode
-  const nextApiKey =
-    typeof partial.apiKey === "string"
-      ? partial.apiKey
-      : typeof current.apiKey === "string"
-        ? current.apiKey
-        : undefined
-  const nextPeerName =
-    typeof partial.peerName === "string" && partial.peerName.trim()
-      ? partial.peerName.trim()
-      : typeof current.peerName === "string" && current.peerName.trim()
-        ? current.peerName.trim()
-        : "user"
-  const currentHosts = isRecord(sharedRaw.hosts) ? { ...sharedRaw.hosts } : {}
-  const currentOpenCodeHost = isRecord(currentHosts.opencode) ? currentHosts.opencode : {}
-  currentHosts.opencode = {
-    ...currentOpenCodeHost,
-    workspace: partialHost?.workspace ?? current.hosts?.opencode?.workspace ?? DEFAULT_SETTINGS.workspace,
-    aiPeer: partialHost?.aiPeer ?? current.hosts?.opencode?.aiPeer ?? DEFAULT_SETTINGS.aiPeer,
-    recallMode: partialHost?.recallMode ?? current.hosts?.opencode?.recallMode ?? DEFAULT_SETTINGS.recallMode,
-    sessionStrategy: partialHost?.sessionStrategy ?? current.hosts?.opencode?.sessionStrategy ?? DEFAULT_SETTINGS.sessionStrategy,
+/**
+ * Start a device sign-in with this plugin's own OAuth client, or the honcho CLI's while Honcho
+ * cloud does not know ours yet. Polling must use the client the code was issued to.
+ */
+export const startDeviceSignIn = async (transport: OAuthTransport = {}) => {
+  try {
+    return { clientId: OAUTH_CLIENT_ID, device: await requestDeviceCode({ ...transport, clientId: OAUTH_CLIENT_ID, source: "opencode" }) }
+  } catch (error) {
+    if (!(error instanceof OAuthError) || (error.code !== "invalid_client" && error.code !== "unauthorized_client")) throw error
+    return { clientId: CLI_OAUTH_CLIENT_ID, device: await requestDeviceCode({ ...transport, clientId: CLI_OAUTH_CLIENT_ID, source: "opencode" }) }
   }
+}
 
-  const next: GlobalSettings & Record<string, unknown> = {
-    ...sharedRaw,
-    baseUrl:
-      typeof partial.baseUrl === "string"
-        ? partial.baseUrl
-        : typeof current.baseUrl === "string"
-          ? current.baseUrl
-          : DEFAULT_SETTINGS.baseUrl,
-    peerName: nextPeerName,
-    hosts: currentHosts,
+/** Device sign-in to Honcho Cloud; the grant is saved to hosts.opencode.oauth. */
+export const runLogin = async (session: TuiSession, intro: string[] = []) => {
+  const configPath = resolveConfigPath()
+  const s = await currentSettings()
+  if (!isCloud(s.baseUrl)) {
+    await session.dialogs.alert({
+      title: "Honcho sign-in",
+      message: `Sign-in is for Honcho Cloud. This config points at ${s.baseUrl}; a self-hosted Honcho uses an API key (/honcho:setup).`,
+    })
+    return false
   }
-  if (typeof nextApiKey === "string") {
-    next.apiKey = nextApiKey
+  let signIn: Awaited<ReturnType<typeof startDeviceSignIn>>
+  try {
+    signIn = await startDeviceSignIn()
+  } catch (error) {
+    await session.dialogs.alert({
+      title: "Honcho sign-in",
+      message: `Could not start sign-in: ${error instanceof Error ? error.message : String(error)}\nYou can paste an API key from app.honcho.dev with /honcho:setup instead.`,
+    })
+    return false
+  }
+  const { device, clientId } = signIn
+  let cancelled = false
+  let finished = false
+  const polling = pollForToken(device, {
+    clientId,
+    sleep: async (ms) => {
+      await delay(ms)
+      if (cancelled) throw new OAuthError("access_denied", "Sign-in cancelled.")
+    },
+  })
+  void session.dialogs
+    .alert({
+      title: "Sign in to Honcho",
+      message: [
+        ...intro,
+        `Open ${device.verificationUriComplete}`,
+        `and confirm the code ${device.userCode}.`,
+        "",
+        "Waiting for approval. Close this dialog to cancel.",
+      ].join("\n"),
+    })
+    .then(() => {
+      if (!finished) cancelled = true
+    })
+  try {
+    const tokens = await polling
+    finished = true
+    await saveGrant(configPath, HOST, tokens)
+    await session.dialogs.alert({
+      title: "Signed in to Honcho",
+      message: `Saved the sign-in to hosts.${HOST} in ${configPath}. New OpenCode sessions use it.`,
+    })
+    return true
+  } catch (error) {
+    finished = true
+    if (cancelled) return false
+    await session.dialogs.alert({
+      title: "Honcho sign-in failed",
+      message: error instanceof Error ? error.message : String(error),
+    })
+    return false
+  }
+}
+
+export const runSetup = async (session: TuiSession) => {
+  const mode = await session.dialogs.select<"login" | "cloud" | "local">({
+    title: "Configure Honcho",
+    options: [
+      { title: "Sign in to Honcho Cloud", value: "login", description: "Approve OpenCode in your browser" },
+      { title: "Honcho Cloud API key", value: "cloud", description: "Paste a key from app.honcho.dev" },
+      { title: "Self-hosted", value: "local", description: "Your own Honcho server" },
+    ],
+  })
+  if (!mode) return
+
+  const configPath = resolveConfigPath()
+  await migrateConfig(configPath)
+  const patch: Partial<HostConfig> = {}
+  if (mode === "local") {
+    const entered = await session.dialogs.prompt({
+      title: "Honcho API base URL",
+      placeholder: "http://127.0.0.1:8000",
+      value: "http://127.0.0.1:8000",
+    })
+    if (entered === undefined) return
+    const baseUrl = normalizeBaseUrl(entered.trim() || "http://127.0.0.1:8000")
+    const apiKey = await session.dialogs.prompt({
+      title: "Honcho API key (optional)",
+      placeholder: "Leave blank if your server runs without auth",
+    })
+    if (apiKey === undefined) return
+    patch.baseUrl = baseUrl === DEFAULT_BASE_URL ? undefined : baseUrl
+    if (apiKey.trim()) patch.apiKey = apiKey.trim()
   } else {
-    delete next.apiKey
+    patch.baseUrl = undefined
+    if (mode === "cloud") {
+      const apiKey = await session.dialogs.prompt({ title: "Honcho API key", placeholder: "hch-..." })
+      if (apiKey === undefined) return
+      const validationError = validateCloudApiKey(apiKey)
+      if (validationError) {
+        await session.dialogs.alert({ title: "Honcho setup incomplete", message: validationError })
+        return
+      }
+      patch.apiKey = apiKey.trim()
+    }
   }
-  return writeGlobalSettings(next)
+
+  // The user's name in Honcho: what other Honcho plugins already use, else $USER.
+  const block = hostBlock(configPath)
+  const suggested = typeof block.peerName === "string" && block.peerName ? block.peerName : suggestPeerName(readConfig(configPath))
+  const peerName = await session.dialogs.prompt({ title: "Your name in Honcho (peerName)", value: suggested })
+  if (peerName === undefined) return
+  if (peerName.trim()) patch.peerName = peerName.trim()
+
+  await saveHost(configPath, HOST, patch, LEGACY)
+  const summary = [`Saved to hosts.${HOST} in ${configPath}`, `Peer name: ${peerName.trim() || suggested}`]
+  if (mode === "login") {
+    await runLogin(session, [...summary, ""])
+    return
+  }
+  const s = await currentSettings()
+  await session.dialogs.alert({ title: "Honcho configured", message: [...summary, "", statusMessage(s)].join("\n") })
 }
 
-const importConfigFromSettings = (settings: GlobalSettings) => {
-  const host = settings.hosts?.opencode || {}
-  const workspaceId = (host.workspace || DEFAULT_SETTINGS.workspace).trim() || DEFAULT_SETTINGS.workspace
-  const aiPeer = host.aiPeer || DEFAULT_SETTINGS.aiPeer
-  const { userPeerId, agentPeerId } = resolveSessionPeerIds(
-    settings.peerName || "user",
-    aiPeer,
-    host.removeUserPrefix === true,
-  )
-  return {
-    apiKey: settings.apiKey || "",
-    baseUrl: resolveBaseUrl(settings as Record<string, unknown>) || DEFAULT_SETTINGS.baseUrl,
-    workspaceId,
-    userPeerId,
-    agentPeerId,
-    sessionStrategy: host.sessionStrategy || DEFAULT_SETTINGS.sessionStrategy,
-    agentObserveMe: host.agentObserveMe === true,
+export const runStatus = async (session: TuiSession) => {
+  const s = await currentSettings()
+  await session.dialogs.alert({ title: "Honcho Status", message: statusMessage(s, session.liveStatus()) })
+}
+
+export const runSettings = async (session: TuiSession) => {
+  const configPath = resolveConfigPath()
+  await migrateConfig(configPath)
+  await session.dialogs.alert({ title: "Honcho Settings", message: settingsMessage(configPath) })
+}
+
+export const runConfig = async (session: TuiSession) => {
+  const configPath = resolveConfigPath()
+  await migrateConfig(configPath)
+  const field = await session.dialogs.select<HostField>({
+    title: `Which hosts.${HOST} field should change?`,
+    options: HOST_FIELDS.map((value) => ({
+      title: value,
+      value,
+      description: value === "baseUrl" ? "self-hosted only; blank = Honcho Cloud" : value === "apiKey" ? "blank removes it" : "blank = default",
+    })),
+  })
+  if (!field) return
+  const block = hostBlock(configPath)
+  const current = field === "apiKey" ? "" : typeof block[field] === "string" ? String(block[field]) : ""
+  const value = await session.dialogs.prompt({ title: `${field}:`, value: current })
+  if (value === undefined) return
+  try {
+    await saveHost(configPath, HOST, hostFieldPatch(field, value), LEGACY)
+    await session.dialogs.alert({
+      title: "Honcho config updated",
+      message: [`Saved ${field} to hosts.${HOST} in ${configPath}.`, "Open sessions keep the old value until restarted."].join("\n"),
+    })
+  } catch (error) {
+    await session.dialogs.alert({
+      title: "Honcho config update failed",
+      message: error instanceof Error ? error.message : String(error),
+    })
   }
 }
 
@@ -294,181 +285,9 @@ const formatImportPreview = (plan: Awaited<ReturnType<typeof planOpenCodeImport>
   return lines.join("\n")
 }
 
-const isConfigured = (settings: GlobalSettings) =>
-  Boolean(settings.apiKey?.trim()) || isLocalBaseUrl(resolveBaseUrl(settings as Record<string, unknown>))
-
-/** true when the user chose a mode and it was saved; false when they dismissed. */
-export const runObservationUpgrade = async (session: TuiSession, followUpLines: string[]) => {
-  const confirmed = await session.dialogs.confirm({
-    title: "New: Honcho observation mode!",
-    message:
-      "Unified: one self-collection, you can share with other unified agents (new default). Directional: keeps Honcho memory specific to your OpenCode agent.",
-    label: { confirm: "Switch to unified", cancel: "Keep directional" },
-  })
-  if (confirmed === undefined) return false
-  const mode: ObservationMode = confirmed ? "unified" : "directional"
-  const configPath = await persistHostObservationMode(mode)
-  await session.dialogs.alert({
-    title: mode === "unified" ? "Switched to unified" : "Keeping directional",
-    message: [
-      ...followUpLines,
-      `Saved observationMode=${mode} to ${configPath}`,
-      mode === "unified" ? unifiedImportFollowUp() : directionalKeepFollowUp(),
-    ].join("\n"),
-  })
-  return true
-}
-
-export const maybePromptObservationUpgrade = async (session: TuiSession) => {
-  try {
-    const settings = await readGlobalSettings()
-    const raw = await readSharedConfig()
-    if (!isConfigured(settings) || !needsObservationUpgradePrompt(raw)) return
-    await runObservationUpgrade(session, [])
-  } catch {
-    return
-  }
-}
-
-export const runStatus = async (session: TuiSession) => {
-  const settings = await readGlobalSettings()
-  await session.dialogs.alert({
-    title: "Honcho Status",
-    message: statusMessage(settings, session.liveStatus(settings)),
-  })
-}
-
-export const runSettings = async (session: TuiSession) => {
-  const settings = await readGlobalSettings()
-  await session.dialogs.alert({ title: "Honcho Settings", message: settingsMessage(settings) })
-}
-
-export const runConfig = async (session: TuiSession) => {
-  let config: Record<string, unknown> | null
-  try {
-    config = await readSharedConfig()
-  } catch (error) {
-    await session.dialogs.alert({
-      title: "Honcho config invalid",
-      message: error instanceof Error ? error.message : String(error),
-    })
-    return
-  }
-  if (!config) {
-    await session.dialogs.alert({
-      title: "Honcho config missing",
-      message: `The config does not exist at ${resolveConfigPath()}.`,
-    })
-    return
-  }
-
-  const fieldPath = await session.dialogs.select<string>({
-    title: "Which field should be modified?",
-    options: modeEditableFieldPaths().map((value) => ({ title: value, value })),
-  })
-  if (!fieldPath) return
-
-  const currentValue = getNestedValue(config, fieldPath)
-  const presetOptions = sharedConfigPresetOptions(fieldPath, currentValue)
-  const rawValue =
-    presetOptions.length > 0
-      ? await session.dialogs.select<string>({
-          title: fieldPath.endsWith("observationMode")
-            ? "Honcho observation mode"
-            : `What should it be set to: ${presetOptions.join(", ")}`,
-          options: fieldPath.endsWith("observationMode")
-            ? observationUpgradeOptions()
-            : presetOptions.map((option) => ({ title: option, value: option })),
-          current: typeof currentValue === "string" ? currentValue : undefined,
-        })
-      : await session.dialogs.prompt({
-          title: "What should it be set to:",
-          value: currentValue === undefined ? "" : String(currentValue),
-        })
-  if (rawValue === undefined) return
-
-  try {
-    const nextConfig = structuredClone(config)
-    const nextValue = parseSharedConfigValue(currentValue, rawValue)
-    setNestedValue(nextConfig, fieldPath, nextValue)
-    const configPath = await writeSharedConfig(nextConfig)
-    const importHint =
-      fieldPath.endsWith("observationMode") && nextValue === "unified" ? unifiedImportFollowUp() : null
-    await session.dialogs.alert({
-      title: "Honcho config updated",
-      message: [`Saved settings to ${configPath}`, `Field: ${fieldPath}`, `Value: ${String(nextValue)}`, importHint]
-        .filter((line): line is string => typeof line === "string")
-        .join("\n"),
-    })
-  } catch (error) {
-    await session.dialogs.alert({
-      title: "Honcho config update failed",
-      message: error instanceof Error ? error.message : String(error),
-    })
-  }
-}
-
-export const runSetup = async (session: TuiSession) => {
-  const mode = await session.dialogs.select<"cloud" | "local">({
-    title: "Configure Honcho",
-    options: [
-      { title: "Honcho Cloud", value: "cloud", description: "Use the default Honcho Cloud endpoint" },
-      { title: "Self-hosted / local", value: "local", description: "Use a custom or localhost Honcho base URL" },
-    ],
-  })
-  if (!mode) return
-
-  let baseUrl = DEFAULT_SETTINGS.baseUrl
-  let apiKey: string | undefined
-  if (mode === "local") {
-    const entered = await session.dialogs.prompt({
-      title: "Honcho API base URL",
-      placeholder: "http://127.0.0.1:8000",
-      value: "http://127.0.0.1:8000",
-    })
-    if (entered === undefined) return
-    baseUrl = entered.trim() || "http://127.0.0.1:8000"
-    apiKey = await session.dialogs.prompt({
-      title: "Optional Honcho API key",
-      placeholder: "Leave blank for local unauthenticated mode",
-    })
-    if (apiKey === undefined) return
-  } else {
-    apiKey = await session.dialogs.prompt({ title: "Honcho API key", placeholder: "hch_..." })
-    if (apiKey === undefined) return
-    const validationError = validateCloudApiKey(apiKey)
-    if (validationError) {
-      await session.dialogs.alert({ title: "Honcho setup incomplete", message: validationError })
-      return
-    }
-  }
-
-  const current = await readGlobalSettings()
-  const peerName = await session.dialogs.prompt({
-    title: "Peer name",
-    placeholder: "Your Honcho peer name",
-    value: typeof current.peerName === "string" ? current.peerName : "",
-  })
-  if (peerName === undefined) return
-
-  const configPath = await saveSettings({ apiKey: apiKey.trim(), baseUrl, peerName: peerName.trim() })
-  const summary = [
-    `Saved settings to ${configPath}`,
-    `Base URL: ${baseUrl}`,
-    `API key: ${apiKey.trim() ? "set" : mode === "local" ? "not required for localhost mode" : "not set"}`,
-    `Peer name: ${peerName.trim() || "user"}`,
-  ]
-  const raw = await readSharedConfig()
-  const settings = await readGlobalSettings()
-  if (isConfigured(settings) && needsObservationUpgradePrompt(raw) && (await runObservationUpgrade(session, summary))) {
-    return
-  }
-  await session.dialogs.alert({ title: "Honcho configured", message: summary.join("\n") })
-}
-
 export const runImport = async (session: TuiSession) => {
-  const settings = await readGlobalSettings()
-  if (!isConfigured(settings)) {
+  const s = await currentSettings(true)
+  if (!s.configured) {
     await session.dialogs.alert({
       title: "Honcho import",
       message: "Run /honcho:setup before importing local OpenCode transcripts.",
@@ -476,15 +295,9 @@ export const runImport = async (session: TuiSession) => {
     return
   }
 
-  const config = importConfigFromSettings(settings)
   let plan: Awaited<ReturnType<typeof planOpenCodeImport>>
   try {
-    plan = await planOpenCodeImport({
-      source: session.transcripts,
-      workspaceId: config.workspaceId,
-      sessionStrategy: config.sessionStrategy,
-      agentPeerId: config.agentPeerId,
-    })
+    plan = await planOpenCodeImport({ source: session.transcripts, workspaceId: s.workspace })
   } catch (error) {
     await session.dialogs.alert({
       title: "Honcho import",
@@ -512,24 +325,18 @@ export const runImport = async (session: TuiSession) => {
   }
 
   try {
-    const honcho = createHonchoClient({
-      apiKey: config.apiKey,
-      baseUrl: config.baseUrl,
-      workspaceId: config.workspaceId,
-    })
+    const honcho = createHonchoClient({ apiKey: s.token, baseUrl: s.baseUrl, workspaceId: s.workspace })
     const result = await executeOpenCodeImport({
       source: session.transcripts,
-      workspaceId: config.workspaceId,
-      sessionStrategy: config.sessionStrategy,
-      agentPeerId: config.agentPeerId,
+      workspaceId: s.workspace,
       honcho,
-      userPeerId: config.userPeerId,
-      agentObserveMe: config.agentObserveMe,
+      userPeerId: s.peerName,
+      agentPeerId: s.aiPeer,
     })
     await session.dialogs.alert({
       title: "Honcho import",
       message: [
-        `Imported ${result.uploadedMessages} message(s) across ${result.uploadedSessions} session(s) into ${config.workspaceId}.`,
+        `Imported ${result.uploadedMessages} message(s) across ${result.uploadedSessions} session(s) into ${s.workspace}.`,
         result.errors.length > 0
           ? `${result.errors.length} session(s) failed.`
           : "Honcho will reason over them; no restart needed.",
@@ -547,28 +354,37 @@ export const COMMANDS: readonly TuiCommandSpec[] = [
   {
     id: "honcho.setup",
     title: "Honcho Setup",
-    description: "Configure Honcho Cloud or local settings for OpenCode",
+    description: "Connect OpenCode to Honcho Cloud (sign in or API key) or a self-hosted Honcho",
     slash: "honcho:setup",
     run: runSetup,
   },
   {
+    id: "honcho.login",
+    title: "Honcho Login",
+    description: "Sign in to Honcho Cloud in your browser",
+    slash: "honcho:login",
+    run: async (session) => {
+      await runLogin(session)
+    },
+  },
+  {
     id: "honcho.status",
     title: "Honcho Status",
-    description: "Show Honcho runtime health for the current OpenCode session",
+    description: "Show Honcho status for the current OpenCode session",
     slash: "honcho:status",
     run: runStatus,
   },
   {
     id: "honcho.settings",
     title: "Honcho Settings",
-    description: "Show effective Honcho config values for OpenCode",
+    description: "Show what is saved in hosts.opencode in ~/.honcho/config.json",
     slash: "honcho:settings",
     run: runSettings,
   },
   {
     id: "honcho.config",
     title: "Honcho Config",
-    description: "Edit shared Honcho config fields from ~/.honcho/config.json",
+    description: "Edit one hosts.opencode field in ~/.honcho/config.json",
     slash: "honcho:config",
     run: runConfig,
   },

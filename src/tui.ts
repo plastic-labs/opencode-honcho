@@ -1,16 +1,5 @@
 import type { TuiPluginModule } from "@opencode-ai/plugin/tui"
-import {
-  modeEditableFieldPaths,
-  normalizeSettings,
-  readSharedConfig,
-  resolveConfigPath,
-  resolveSharedConfigField,
-  saveSettings,
-  settingsMessage,
-  sharedConfigPresetOptions,
-  statusMessage,
-  validateCloudApiKey,
-} from "./tui/commands.js"
+import { resolveConfigPath, settingsMessage, startDeviceSignIn, statusMessage, validateCloudApiKey } from "./tui/commands.js"
 import { buildCommands, deriveLiveStatus, tui } from "./tui/v1.js"
 import { buildCommandsV2, setup } from "./tui/v2.js"
 
@@ -27,14 +16,9 @@ export const __testing = {
   buildCommands,
   buildCommandsV2,
   deriveLiveStatus,
-  normalizeSettings,
-  modeEditableFieldPaths,
-  readSharedConfig,
-  resolveSharedConfigField,
-  saveSettings,
   settingsMessage,
   sharedConfigPath: resolveConfigPath,
-  sharedConfigPresetOptions,
+  startDeviceSignIn,
   statusMessage,
   validateCloudApiKey,
 }

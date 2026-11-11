@@ -1,5 +1,4 @@
 import type { TranscriptSource } from "../import.js"
-import type { ObservationMode, RecallMode, SessionStrategy } from "../core.js"
 
 export type DialogOption<T = string> = {
   title: string
@@ -20,30 +19,12 @@ export type Dialogs = {
 }
 
 export type LiveStatus = {
-  workspaceName?: string
   openCodeSessionId?: string
-}
-
-export type GlobalSettings = {
-  apiKey?: string
-  peerName?: string
-  baseUrl?: string
-  hosts?: {
-    opencode?: {
-      workspace?: string
-      aiPeer?: string
-      recallMode?: RecallMode
-      observationMode?: ObservationMode
-      agentObserveMe?: boolean
-      sessionStrategy?: SessionStrategy
-      removeUserPrefix?: boolean
-    }
-  }
 }
 
 export type TuiSession = {
   dialogs: Dialogs
-  liveStatus: (settings: GlobalSettings) => LiveStatus
+  liveStatus: () => LiveStatus
   transcripts: TranscriptSource
 }
 
