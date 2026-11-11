@@ -217,3 +217,57 @@ describe("OpenCode 2 event scoping", () => {
     }
   })
 })
+
+describe("OpenCode 2 recall placement", () => {
+  // Honcho API stub: creates echo their id, and the session context carries a recall per search query.
+  const honchoFetch = async (url, init = {}) => {
+    const target = new URL(url)
+    if (/\/sessions\/[^/]+\/context$/.test(target.pathname))
+      return Response.json({ messages: [], summary: null, peer_representation: `Recall for ${target.searchParams.get("search_query")}`, peer_card: null })
+    if (target.pathname.endsWith("/messages")) return Response.json([])
+    const body = typeof init.body === "string" ? JSON.parse(init.body) : {}
+    return Response.json({ id: body.id, metadata: {}, configuration: {}, created_at: new Date(0).toISOString() })
+  }
+
+  test("recall stays right after its prompt on every step and turn", async () => {
+    const home = await mkdtemp(path.join(os.tmpdir(), "honcho-v2-"))
+    const configPath = path.join(home, "config.json")
+    await writeFile(configPath, JSON.stringify({ apiKey: "test-key", peerName: "wire", hosts: { opencode: { recallMode: "hybrid" } } }))
+    const realFetch = globalThis.fetch
+    globalThis.fetch = honchoFetch
+    try {
+      const { ctx, hooks, find } = fakeContext({ directory: home })
+      ctx.options = { configPath }
+      const mod = await import("../dist/server.js")
+      const cleanup = await mod.default.setup(ctx)
+      const prompt = (message) => find(hooks.session, "prompt")({ sessionID: "ses_place", messageID: message.id, prompt: { text: message.content[0].text } })
+      const request = async (...messages) => {
+        const event = { sessionID: "ses_place", model: { providerID: "anthropic", id: "claude" }, system: [], messages }
+        await find(hooks.session, "context")(event)
+        return event.messages.map((message) => message.id ?? message.content[0].text)
+      }
+      const user = (id, text) => ({ id, role: "user", content: [{ type: "text", text }] })
+      const first = user("msg_1", "fix memory injection")
+      const second = user("msg_2", "now add tests for placement")
+      const reply = [{ id: "msg_a", role: "assistant", content: [] }, { id: "msg_t", role: "tool", content: [] }]
+      const recall = expect.stringContaining("Recall for")
+
+      await prompt(first)
+      expect(await request(first)).toEqual(["msg_1", recall])
+      // Later steps only append: the recall must not move to the tail.
+      expect(await request(first, ...reply)).toEqual(["msg_1", recall, "msg_a", "msg_t"])
+      // A queued prompt's recall waits until the prompt is in the history.
+      await prompt(second)
+      expect(await request(first, ...reply)).toEqual(["msg_1", recall, "msg_a", "msg_t"])
+      expect(await request(first, ...reply, second)).toEqual(["msg_1", recall, "msg_a", "msg_t", "msg_2", recall])
+      // Removed by a revert: the same topic gets no new block from Honcho, so the old recall moves to it.
+      const third = user("msg_3", "now add tests for placement")
+      await prompt(third)
+      expect(await request(first, ...reply, third)).toEqual(["msg_1", recall, "msg_a", "msg_t", "msg_3", recall])
+
+      await cleanup()
+    } finally {
+      globalThis.fetch = realFetch
+    }
+  })
+})
