@@ -65,9 +65,13 @@ export const setup = async (ctx: PluginContext) => {
   const core = createHonchoCore(consoleHost(ctx.location.directory, ctx.location.project?.directory), configPath)
   core.setHostVersion(ctx.app.version)
 
-  // Prompt-specific recall per session. The v1 path appends it to the user message; on v2 the
-  // prompt hook's edits become the persisted user text, so it rides in the request context instead.
-  const pendingRecall = new Map<string, string>()
+  // Prompt-specific recall, per session and prompt message ID. The v1 path appends it to the user
+  // message; on v2 the prompt hook's edits become the persisted user text, so it rides in the
+  // request context instead. That context is rebuilt every step, so each recall goes back in right
+  // after its own prompt: appending at the tail moved it every step, which broke prompt caching
+  // and made claude-agent restart its Claude Code session.
+  // Every prompt is recorded, with undefined when Honcho returned no new recall for it.
+  const pendingRecall = new Map<string, Map<string, string | undefined>>()
 
   const here = ctx.location.directory
   const sessionDirectories = new Map<string, string>()
@@ -87,7 +91,8 @@ export const setup = async (ctx: PluginContext) => {
       timestampToIso(Date.now()),
       "session.prompt",
     )
-    if (block) pendingRecall.set(event.sessionID, block)
+    const recalls = pendingRecall.get(event.sessionID) ?? new Map<string, string | undefined>()
+    pendingRecall.set(event.sessionID, recalls.set(event.messageID, block ?? undefined))
     await core.log("debug", "Honcho captured user prompt.", { sessionId: event.sessionID, recall: Boolean(block) })
   })
 
@@ -96,8 +101,20 @@ export const setup = async (ctx: PluginContext) => {
     const blocks = await core.systemBlocks({ sessionID: event.sessionID })
     if (blocks.length === 0) return
     for (const text of blocks) event.system.push({ type: "text", text })
-    const recall = pendingRecall.get(event.sessionID)
-    if (recall) event.messages.push({ role: "user", content: [{ type: "text", text: recall }] })
+    // Prompts arrive in order, so a missing prompt followed by a present one was removed (compaction
+    // or a revert), not queued. Its recall moves to the next prompt that has none: Honcho skips
+    // repeating a block it believes is still shown.
+    let orphan: string | undefined
+    for (const [messageID, recall] of pendingRecall.get(event.sessionID) ?? []) {
+      const at = event.messages.findIndex((message) => message.id === messageID)
+      if (at === -1) {
+        orphan = recall ?? orphan
+        continue
+      }
+      const text = recall ?? orphan
+      orphan = undefined
+      if (text) event.messages.splice(at + 1, 0, { role: "user", content: [{ type: "text", text }] })
+    }
   })
 
   await ctx.session.hook("compaction", async (event) => {
